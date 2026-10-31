@@ -444,6 +444,19 @@ static void publish(volatile uint8_t *lists, volatile uint8_t *mbox, uint32_t fi
  * of the last published list. */
 static pthread_mutex_t g_pub_lock = PTHREAD_MUTEX_INITIALIZER;
 static volatile uint8_t *g_lists, *g_recs;
+
+/* The newest finished frame record and its bank. Frame N is written to bank N & 1, so in steady
+   state the two trailers are consecutive. A NES reset (the reset button, or the ROM patcher
+   replaying a ROM, which "HD Pack" Off/On and a pack load do) restarts the numbers at 1 while the
+   other bank still holds the old game's number: two trailers more than 1 apart mean the larger
+   one is stale, and the newest record is the smaller. */
+static uint32_t newest_record(volatile uint8_t *recs, uint32_t *bank) {
+    uint32_t f0 = (uint32_t)rd64(recs + TRAILER), f1 = (uint32_t)rd64(recs + REC_LEN + TRAILER);
+    uint32_t hi = f0 > f1 ? f0 : f1, lo = f0 > f1 ? f1 : f0;
+    uint32_t F = hi - lo > 1 ? lo : hi;
+    *bank = F == f0 ? 0 : 1;
+    return F;
+}
 static uint32_t g_fid;                       /* last frame id published (under g_pub_lock) */
 static uint64_t *g_last;                     /* the last published list (under g_pub_lock) */
 static size_t g_last_nq;
@@ -473,8 +486,7 @@ static void *pacer(void *arg) {
     pthread_setschedparam(pthread_self(), SCHED_FIFO, &sp);   /* best effort: fine if refused */
     uint32_t seen = 0;
     while (!g_stop) {
-        uint32_t f0 = (uint32_t)rd64(g_recs + TRAILER), f1 = (uint32_t)rd64(g_recs + REC_LEN + TRAILER);
-        uint32_t N = f0 > f1 ? f0 : f1;
+        uint32_t nb, N = newest_record(g_recs, &nb);
         if (N > seen) {
             seen = N;
             if (g_busy) {
@@ -565,8 +577,15 @@ int main(int argc, char **argv) {
                     gen, len, nw, now_ms() - t0);
         }
         /* the newest finished record */
-        uint32_t f0 = (uint32_t)rd64(recs + TRAILER), f1 = (uint32_t)rd64(recs + REC_LEN + TRAILER);
-        uint32_t F = f0 > f1 ? f0 : f1, b = f0 > f1 ? 0 : 1;
+        uint32_t b, F = newest_record(recs, &b);
+        if (F < last) {
+            /* the NES was reset: frame numbers restarted. Without this every new record is
+               "older" than the last one decided, nothing is published again and the engine
+               paints a stale list (garbled) until the daemon restarts. */
+            last = 0; have_held = 0;
+            forget_last();
+            fprintf(stderr, "hdarm: the game was reset, frame records restarted at %u\n", F);
+        }
         if (F <= last || (F & 1) != b) { usleep(500); continue; }
         volatile uint8_t *bank = recs + b * REC_LEN;
         uint8_t vals[256] = {0};
