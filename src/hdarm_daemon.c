@@ -129,6 +129,9 @@ static void copy_aligned(volatile uint8_t *base, uint32_t off, uint32_t len, uin
         dst += n; off += n; len -= n;
     }
 }
+static void pk_drop(void);
+static uint8_t last_rom_sha[20];                         /* the game the pack was loaded under */
+static int last_rom_known;
 static void romfix_service(rf_state *st, uint8_t *rom, uint8_t *tgt) {
     volatile uint8_t *stq = g_mbox + (RF_ST_OFF - 0x0C400000u), *cmq = g_mbox + (RF_CMD_OFF - 0x0C400000u);
     if (rf_session_check(st, rd64(cmq)))
@@ -167,6 +170,14 @@ static void romfix_service(rf_state *st, uint8_t *rom, uint8_t *tgt) {
     }
     fprintf(stderr, "hdarm: ROM %u bytes: action %u result %u (%u bytes), %.1f ms\n", L,
             (unsigned)((cmd >> 30) & 3), (unsigned)((cmd >> 27) & 7), tl, now_ms() - t0);
+    /* rf_decide hashed this status's ROM (once per OSD download). A different game than the last
+       one: drop the pack. Answered first, so a held core is released at once; the drop then turns
+       `active` off and the next question (no pack) needs no replay. */
+    if (st->hashed) {
+        if (last_rom_known && memcmp(last_rom_sha, st->sha_raw, 20)) pk_drop();
+        memcpy(last_rom_sha, st->sha_raw, 20);
+        last_rom_known = 1;
+    }
 }
 
 static void *service(void *arg) {
@@ -274,11 +285,10 @@ static void *audio(void *arg) {
  * [39:36] why a COMMIT was refused. BEGIN invalidates the pack first, so the FPGA stops reading it
  * before it is overwritten; COMMIT makes the FPGA read the header back and judge it.
  * The .s1 file is watched by its modification time (MiSTer rewrites it on every pick, the same
- * file included). At start-up, if the FPGA has no valid pack, the remembered pack (.s1, or .f4
- * from the earlier "Load HD Pack" that streamed the file) is loaded, as that one did. */
+ * file included); only a pick loads a pack, never the path left in .s1 by an earlier session.
+ * Loading a different game drops the pack (pk_drop, from the ROM patcher's service thread). */
 #define CMD_OFF   0x60
 #define S1_PATH   "/media/fat/config/NES_HD.s1"
-#define F4_PATH   "/media/fat/config/NES_HD.f4"
 static const char *const reject_why[16] = {
     "accepted", "not an HD pack (magic)", "wrong format version", "bad scale", "unknown flag bits",
     "size differs from the header (truncated or wrong file)", "larger than 384 MB",
@@ -309,22 +319,40 @@ static int read_cfg_path(const char *cfg, char *out, size_t outlen) {
 }
 
 /* write a command and wait for its answer; a command written before the FPGA took its baseline
-   read is never answered, so it is sent again under a new sequence */
+   read is never answered, so it is sent again under a new sequence. Both the loader thread and
+   the service thread (dropping the pack when another game is loaded) send commands: one at a
+   time. */
+static pthread_mutex_t pk_lock = PTHREAD_MUTEX_INITIALIZER;
 static int pk_command(int op, uint32_t size, uint64_t *answer) {
     volatile uint8_t *cmq = g_mbox + CMD_OFF, *stq = g_mbox + 8;
+    int rc = 1;
+    pthread_mutex_lock(&pk_lock);
     uint8_t seq = (uint8_t)(rd64(cmq) >> 40);
-    for (int attempt = 0; attempt < 3; attempt++) {
+    for (int attempt = 0; attempt < 3 && rc; attempt++) {
         seq++;
         __sync_synchronize();
         wr64(cmq, 0xC5ull << 56 | (uint64_t)op << 48 | (uint64_t)seq << 40 | size);
         double t0 = now_ms();
         while (now_ms() - t0 < 1000 && !g_stop) {
             uint64_t s = rd64(stq);
-            if ((s >> 56) == 0x5A && (uint8_t)(s >> 40) == seq) { *answer = s; return 0; }
+            if ((s >> 56) == 0x5A && (uint8_t)(s >> 40) == seq) { *answer = s; rc = 0; break; }
             usleep(1000);
         }
     }
-    return 1;
+    pthread_mutex_unlock(&pk_lock);
+    return rc;
+}
+
+/* Another game was loaded from the OSD: the pack belongs to the old one, so drop it (BEGIN makes
+   the FPGA mark the pack invalid). The picture returns to the console's own and the next "Load HD
+   Pack" pick loads a pack for the new game. Reloading the same ROM keeps the pack. */
+static void pk_drop(void) {
+    uint64_t pw = rd64(g_mbox + 8), ans;
+    if (!((pw >> 56) == 0x5A && ((pw >> 48) & 1))) return;      /* no valid pack: nothing to do */
+    if (pk_command(1, 0, &ans) == 0)
+        fprintf(stderr, "hdarm: another game was loaded: HD pack dropped\n");
+    else
+        fprintf(stderr, "hdarm: another game was loaded but the core did not answer the pack drop\n");
 }
 
 /* 0 = loaded (or refused by the FPGA: reported), 1 = not loaded, 2 = .s1 changed mid-copy */
@@ -375,13 +403,9 @@ static void *loader(void *arg) {
     cpu_set_t cs; CPU_ZERO(&cs); CPU_SET(1, &cs);
     pthread_setaffinity_np(pthread_self(), sizeof cs, &cs);
     char path[1100];
+    /* Only a pick loads a pack: the path MiSTer remembers in .s1 is NOT loaded at start-up (the
+       owner, 2026-10-31: a pack must not appear on a ROM the user did not choose one for). */
     long seen = mtime_ms(S1_PATH);
-    usleep(500000);                                      /* let the FPGA take its baseline */
-    uint64_t pw = rd64(g_mbox + 8);
-    if (!((pw >> 56) == 0x5A && ((pw >> 48) & 1))) {     /* no pack yet: the remembered one */
-        if (read_cfg_path(S1_PATH, path, sizeof path) || read_cfg_path(F4_PATH, path, sizeof path))
-            load_pack_file(path, seen);
-    }
     while (!g_stop) {
         long m = mtime_ms(S1_PATH);
         if (m >= 0 && m != seen) {
