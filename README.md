@@ -31,7 +31,7 @@ HD pack engine runs on the MiSTer's ARM CPU and draws each tile and sprite the w
 Copy these to the SD card:
 
 ```
-_Other/NES_HD_20261029.rbf          ->  /media/fat/_Other/
+_Other/NES_HD_20261031.rbf          ->  /media/fat/_Other/
 games/NES_HD/NES_HD                 ->  /media/fat/games/NES_HD/
 games/NES_HD/_handler.sh            ->  /media/fat/games/NES_HD/
 games/NES_HD/Palette/               ->  /media/fat/games/NES_HD/Palette/   (optional palettes)
@@ -63,7 +63,17 @@ so always unzip rather than renaming the download.
 2. Open the OSD (menu button), go to **Audio & Video**, choose **Load HD Pack** and pick the pack.
 3. Set **HD Pack** to **On**.
 
-Loading a pack restarts the game, so load the pack before you start playing.
+The pack is copied straight from the SD card, so even the largest packs load in a few seconds (the
+285 MB Dragon Quest III pack takes about 13 seconds the first time, less after that).
+
+- **Packs that patch the ROM restart the game.** Many packs also change the game itself (music hooks,
+  fixes). The patched game has to be loaded fresh, so loading such a pack, or switching **HD Pack** Off
+  or On while it is loaded, starts the game again from the beginning. Load the pack before you start
+  playing.
+- **A pack is only loaded when you pick one.** Loading a ROM never brings back the pack from a previous
+  session.
+- **Loading a different ROM unloads the pack**, so the next game starts with its normal graphics. Load
+  that game's own pack with **Load HD Pack**. Reloading the same ROM keeps its pack.
 
 **Matching a pack to a ROM.** A pack's file name is the name of its ROM, plus an optional label in square
 brackets when there is more than one pack for the same ROM:
