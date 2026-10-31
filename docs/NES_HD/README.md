@@ -10,9 +10,9 @@ HD pack engine runs on the MiSTer's ARM CPU and draws each tile and sprite the w
 
 **Status: testing build.** It is not in `update_all` yet. Things to know before installing:
 
-- The FPGA build closes timing with every slack positive (worst +0.145 ns), so the build is valid.
+- The FPGA build closes timing with every slack positive (worst +0.157 ns), so the build is valid.
 - The core's MiSTer framework (`fpga/sys`) is one Template_MiSTer update behind and will be refreshed.
-- All 124 packs in the collection have been converted and checked on a PC, and are installed on the
+- All 123 packs in the collection have been converted and checked on a PC, and are installed on the
   developer's MiSTer for hardware testing. Report anything that looks or sounds wrong.
 - On the heaviest packs a frame's HD graphics are occasionally not ready in time. When that happens
   the previous picture is shown again for one frame (1/60 of a second) instead of a black frame.
@@ -95,7 +95,7 @@ problem.
 
 ## ROMs needed
 
-49 ROMs cover all 124 packs. Sizes are the full file including the 16-byte header. 44 of them match the
+49 ROMs cover all 123 packs. Sizes are the full file including the 16-byte header. 44 of them match the
 No-Intro NES DAT (headered) exactly; a note on each of the other five says where it comes from.
 
 **(F1140) Dig Dug.nes**
@@ -232,7 +232,7 @@ No-Intro NES DAT (headered) exactly; a note on each of the other five says where
 - Size: 24,592 bytes
 - MD5: `1C2B01E982667D7BA723988C771D88FA`
 - SHA-1: `F5B310E71129315192C28EF457DA16D5FB1BC91E`
-- Packs (4): Duck Hunt (World) [Audio], Duck Hunt (World) [HD v1.1], Duck Hunt (World) [NEA Audio], Duck Hunt (World)
+- Packs (3): Duck Hunt (World) [Audio], Duck Hunt (World) [HD v1.1], Duck Hunt (World)
 
 **Faxanadu (USA).nes**
 
@@ -519,7 +519,7 @@ for MiSTer by MiSTer Organize.
 **Duck Hunt**
 - main pack: Duck Hunt HD v1.1 with NEA audio
 - `HD v1.1`: Duck Hunt HD v1.1, Aclectico and GBAGuy007
-- `Audio`, `NEA Audio`: LiQuiDz and Cubear (HDnes repository)
+- `Audio`: NEA audio, LiQuiDz and Cubear (HDnes repository)
 
 **Faxanadu** - Faxanadu: Revisioned v1.26, Altwolf.
 
