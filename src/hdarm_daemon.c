@@ -296,10 +296,10 @@ static const char *const reject_why[16] = {
     "-", "too many watched addresses", "inconsistent addition table", "unknown command",
     "-", "-", "-" };
 
-static long mtime_ms(const char *path) {
+static int64_t mtime_ms(const char *path) {
     struct stat st;
     if (stat(path, &st)) return -1;
-    return (long)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
+    return (int64_t)st.st_mtim.tv_sec * 1000 + st.st_mtim.tv_nsec / 1000000;
 }
 
 /* the path MiSTer stored (NUL-terminated; the rest of its buffer may hold stale bytes) */
@@ -356,7 +356,7 @@ static void pk_drop(void) {
 }
 
 /* 0 = loaded (or refused by the FPGA: reported), 1 = not loaded, 2 = .s1 changed mid-copy */
-static int load_pack_file(const char *path, long s1_when) {
+static int load_pack_file(const char *path, int64_t s1_when) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) { fprintf(stderr, "hdarm: cannot open %s\n", path); return 1; }
     struct stat st;
@@ -405,9 +405,9 @@ static void *loader(void *arg) {
     char path[1100];
     /* Only a pick loads a pack: the path MiSTer remembers in .s1 is NOT loaded at start-up (the
        owner, 2026-10-31: a pack must not appear on a ROM the user did not choose one for). */
-    long seen = mtime_ms(S1_PATH);
+    int64_t seen = mtime_ms(S1_PATH);
     while (!g_stop) {
-        long m = mtime_ms(S1_PATH);
+        int64_t m = mtime_ms(S1_PATH);
         if (m >= 0 && m != seen) {
             seen = m;
             usleep(100000);                              /* MiSTer may still be writing it */
