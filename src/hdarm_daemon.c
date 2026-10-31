@@ -280,7 +280,10 @@ static void *audio(void *arg) {
  * the core nothing. This thread, on core 1, copies the file from the SD card straight into DDR3
  * (bytes below 192 MB at 0x30000000, the rest at 0x24000000) at the card's speed, then has the
  * FPGA check it (rtl/hdpack/hd3_loader.sv). The command qword (mailbox + 0x60):
- *   [63:56] 0xC5  [55:48] 1 = BEGIN, 2 = COMMIT  [47:40] sequence  [31:0] file size
+ *   [63:56] 0xC5  [55:48] 1 = BEGIN, 2 = COMMIT  [47:40] sequence
+ *   [39:32] copy progress 0..100 (0xFF = none)  [31:0] file size
+ * While a pack is copied the BEGIN is rewritten with the same sequence and the progress byte
+ * updated; the core draws "LOADING nn%" from it until the COMMIT (or a BEGIN with 0xFF).
  * The answer is the pack-state qword (mailbox + 8): [47:40] the sequence carried out, [48] valid,
  * [39:36] why a COMMIT was refused. BEGIN invalidates the pack first, so the FPGA stops reading it
  * before it is overwritten; COMMIT makes the FPGA read the header back and judge it.
@@ -323,7 +326,8 @@ static int read_cfg_path(const char *cfg, char *out, size_t outlen) {
    the service thread (dropping the pack when another game is loaded) send commands: one at a
    time. */
 static pthread_mutex_t pk_lock = PTHREAD_MUTEX_INITIALIZER;
-static int pk_command(int op, uint32_t size, uint64_t *answer) {
+#define PK_NO_PCT 0xFFu
+static int pk_command(int op, uint32_t size, unsigned pct, uint64_t *answer) {
     volatile uint8_t *cmq = g_mbox + CMD_OFF, *stq = g_mbox + 8;
     int rc = 1;
     pthread_mutex_lock(&pk_lock);
@@ -331,7 +335,8 @@ static int pk_command(int op, uint32_t size, uint64_t *answer) {
     for (int attempt = 0; attempt < 3 && rc; attempt++) {
         seq++;
         __sync_synchronize();
-        wr64(cmq, 0xC5ull << 56 | (uint64_t)op << 48 | (uint64_t)seq << 40 | size);
+        wr64(cmq, 0xC5ull << 56 | (uint64_t)op << 48 | (uint64_t)seq << 40 |
+                  (uint64_t)(pct & 0xFF) << 32 | size);
         double t0 = now_ms();
         while (now_ms() - t0 < 1000 && !g_stop) {
             uint64_t s = rd64(stq);
@@ -343,13 +348,25 @@ static int pk_command(int op, uint32_t size, uint64_t *answer) {
     return rc;
 }
 
+/* Rewrite the BEGIN that started this copy with a new progress byte (the sequence is unchanged,
+   so the core treats it as progress, not as a command). Skipped if another command was sent
+   since (the pack was dropped from the other thread): that BEGIN is no longer ours to change. */
+static void pk_progress(uint8_t seq, unsigned pct) {
+    volatile uint8_t *cmq = g_mbox + CMD_OFF;
+    pthread_mutex_lock(&pk_lock);
+    uint64_t c = rd64(cmq);
+    if ((c >> 56) == 0xC5 && ((c >> 48) & 0xFF) == 1 && (uint8_t)(c >> 40) == seq)
+        wr64(cmq, (c & ~(0xFFull << 32)) | (uint64_t)(pct & 0xFF) << 32);
+    pthread_mutex_unlock(&pk_lock);
+}
+
 /* Another game was loaded from the OSD: the pack belongs to the old one, so drop it (BEGIN makes
    the FPGA mark the pack invalid). The picture returns to the console's own and the next "Load HD
    Pack" pick loads a pack for the new game. Reloading the same ROM keeps the pack. */
 static void pk_drop(void) {
     uint64_t pw = rd64(g_mbox + 8), ans;
     if (!((pw >> 56) == 0x5A && ((pw >> 48) & 1))) return;      /* no valid pack: nothing to do */
-    if (pk_command(1, 0, &ans) == 0)
+    if (pk_command(1, 0, PK_NO_PCT, &ans) == 0)
         fprintf(stderr, "hdarm: another game was loaded: HD pack dropped\n");
     else
         fprintf(stderr, "hdarm: another game was loaded but the core did not answer the pack drop\n");
@@ -370,25 +387,37 @@ static int load_pack_file(const char *path, int64_t s1_when) {
     }
     uint32_t size = (uint32_t)st.st_size;
     uint64_t ans;
-    if (pk_command(1, 0, &ans)) {
+    if (pk_command(1, 0, 0, &ans)) {
         fprintf(stderr, "hdarm: the core does not answer the pack loader (an older RBF?)\n");
         close(fd); return 1;
     }
+    uint8_t seq = (uint8_t)(rd64(g_mbox + CMD_OFF) >> 40);
     fprintf(stderr, "hdarm: loading %s (%.1f MB)\n", path, size / 1048576.0);
     double t0 = now_ms();
+    unsigned shown = 0;
     lseek(fd, 0, SEEK_SET);
     for (uint32_t off = 0; off < size; ) {
-        if (g_stop || (s1_when >= 0 && mtime_ms(S1_PATH) != s1_when)) { close(fd); return 2; }
+        if (g_stop || (s1_when >= 0 && mtime_ms(S1_PATH) != s1_when)) {
+            pk_progress(seq, PK_NO_PCT); close(fd); return 2;
+        }
         uint32_t n = size - off < 0x100000 ? size - off : 0x100000;   /* never straddles 192 MB */
         volatile uint8_t *dst = off < PACK_MAX ? g_pk + off : g_ovf + (off - PACK_MAX);
         ssize_t r = read(fd, (void *)dst, n);
-        if (r <= 0) { fprintf(stderr, "hdarm: read error at %u\n", off); close(fd); return 1; }
+        if (r <= 0) {
+            fprintf(stderr, "hdarm: read error at %u\n", off);
+            pk_progress(seq, PK_NO_PCT); close(fd); return 1;
+        }
         off += (uint32_t)r;
+        unsigned pct = (unsigned)((uint64_t)off * 100 / size);
+        if (pct != shown) { shown = pct; pk_progress(seq, pct); }
     }
     close(fd);
     double t1 = now_ms();
     __sync_synchronize();
-    if (pk_command(2, size, &ans)) { fprintf(stderr, "hdarm: no answer to the pack check\n"); return 1; }
+    if (pk_command(2, size, PK_NO_PCT, &ans)) {
+        fprintf(stderr, "hdarm: no answer to the pack check\n");
+        pk_progress(seq, PK_NO_PCT); return 1;
+    }
     unsigned rj = (unsigned)(ans >> 36) & 15;
     if ((ans >> 48) & 1)
         fprintf(stderr, "hdarm: pack loaded in %.1f s (%.1f MB/s), checked in %.0f ms\n",
