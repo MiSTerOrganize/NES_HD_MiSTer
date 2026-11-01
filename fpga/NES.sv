@@ -1266,17 +1266,34 @@ hd_reticle hd_reticle
 	.r_out(hd_r_o), .g_out(hd_g_o), .b_out(hd_b_o)
 );
 
+// "LOADING nn%" in the bottom-right corner while an HD pack is copied (hd_loadpct.sv, the same
+// read-out as OpenBOR_7533's). Not on the composite output: its pixel stream is ~4x the NES
+// width, so 5-pixel glyphs would come out a quarter as wide.
+wire       mix_pix = use_composite ? comp_pix : use_hd ? hd_pix : ce_pix;
+wire       mix_hb  = use_composite ? comp_hb_c : use_hd ? hd_hb : HBlank;
+wire       mix_vb  = use_composite ? comp_vb_c : use_hd ? hd_vb : VBlank;
+wire [7:0] mix_r, mix_g, mix_b;
+hd_loadpct hd_loadpct
+(
+	.clk(CLK_VIDEO), .ce(mix_pix), .hb(mix_hb), .vb(mix_vb),
+	.show_in(hd_load_show && !use_composite), .pct_in(hd_load_pct),
+	.r_in(use_composite ? comp_r : use_hd ? hd_r_o : R),
+	.g_in(use_composite ? comp_g : use_hd ? hd_g_o : G),
+	.b_in(use_composite ? comp_b : use_hd ? hd_b_o : B),
+	.r_out(mix_r), .g_out(mix_g), .b_out(mix_b)
+);
+
 video_mixer #(.LINE_LENGTH(260), .HALF_DEPTH(0), .GAMMA(1)) video_mixer
 (
 	.*,
-	.ce_pix(use_composite ? comp_pix : use_hd ? hd_pix : ce_pix),
-	.R(use_composite ? comp_r : use_hd ? hd_r_o : R),
-	.G(use_composite ? comp_g : use_hd ? hd_g_o : G),
-	.B(use_composite ? comp_b : use_hd ? hd_b_o : B),
+	.ce_pix(mix_pix),
+	.R(mix_r),
+	.G(mix_g),
+	.B(mix_b),
 	.HSync(use_composite ? comp_hs : use_hd ? hd_hs : HSync),
 	.VSync(use_composite ? comp_vs : use_hd ? hd_vs : VSync),
-	.HBlank(use_composite ? comp_hb_c : use_hd ? hd_hb : HBlank),
-	.VBlank(use_composite ? comp_vb_c : use_hd ? hd_vb : VBlank),
+	.HBlank(mix_hb),
+	.VBlank(mix_vb),
 	.freeze_sync(),
 	.VGA_DE(vga_de),
 	.hq2x(scale==1 && !use_composite && !use_hd),
@@ -1445,6 +1462,8 @@ eReg_SavestateV #(SSREG_INDEX_HDAUD_B, SSREG_DEFAULT_HDAUD_B) iREG_SAVESTATE_HdA
 // records and the savestates share DDR3 through hd3_ddr, also on clk85. The picture comes
 // back on clk, one HD pixel per clk, timed from the tap exactly as the MVP's was.
 wire        hd_load_wait, hd_active;
+wire        hd_load_show;              // an HD pack is being copied into DDR3 (core clock)
+wire  [6:0] hd_load_pct;               // its progress, 0..100
 wire  [7:0] hd_r, hd_g, hd_b;
 wire        hd_hs, hd_vs, hd_hb, hd_vb;
 wire        hd_cw_valid, hd_cw_ready;
@@ -1556,6 +1575,8 @@ hd3_engine hd3_engine
 	.DDRAM_WE    (DDRAM_WE),
 
 	.active      (hd_active),
+	.load_show   (hd_load_show),
+	.load_pct    (hd_load_pct),
 	.nolimit     (hd_nolimit),
 	.R(hd_r), .G(hd_g), .B(hd_b),
 	.HS(hd_hs), .VS(hd_vs), .HB(hd_hb), .VB(hd_vb),

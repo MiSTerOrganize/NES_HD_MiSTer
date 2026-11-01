@@ -9,7 +9,12 @@
 //
 // The ARM drives this module through one command qword it writes beside the mailbox (CMD_Q,
 // byte 0x3C400060):
-//   [63:56] 0xC5   [55:48] op: 1 = BEGIN, 2 = COMMIT   [47:40] sequence   [31:0] file size
+//   [63:56] 0xC5   [55:48] op: 1 = BEGIN, 2 = COMMIT   [47:40] sequence
+//   [39:32] copy progress, 0..100 percent, 0xFF = none   [31:0] file size
+// While it copies, the ARM rewrites the BEGIN it sent with the same sequence and the progress
+// byte updated. Those rewrites are not commands (the sequence did not change); the loader only
+// latches the byte into load_pct, and load_show is set while a BEGIN it carried out is the
+// latest command and the byte is 0..100 (NES.sv draws "LOADING nn%" from them).
 // The loader reads it every 2^POLL_W clocks through the engine's single-access DDR3 crossing. A
 // command is carried out once: its sequence must differ from the last one carried out. The first
 // read after power-up only records the sequence it finds: DDR3 keeps an old command across a
@@ -58,6 +63,8 @@ module hd3_loader #(
 	output reg  [3:0] reject = 0,      // why the last COMMIT was refused (0 = accepted)
 	output reg  [7:0] ack_seq = 0,     // sequence of the last command carried out
 	output reg        st_t = 0,        // toggles when pack_ok / reject / ack_seq were updated
+	output reg        load_show = 0,   // a pack copy is in progress: show load_pct
+	output reg  [6:0] load_pct = 0,    // its progress, 0..100
 
 	// header fields used by the engine
 	output     [7:0]  scale,
@@ -198,7 +205,9 @@ reg        busy = 0;           // a read is outstanding (a reset waits for it in
 reg        based = 0;         // the first command read after power-up was taken
 reg  [7:0] last_seq = 0;       // the last command carried out (or found at power-up)
 reg  [7:0] cmd_seq = 0;
-reg  [5:0] hq = 0;             // header qword being read (0..33)
+reg        in_begin = 0;       // the last command carried out was a BEGIN
+wire       pct_ok = m_dout[39:32] <= 8'd100;
+reg  [5:0] hq = 0;            // header qword being read (0..33)
 reg  [8:0] wi = 0;             // watch-list entry being copied
 reg  [8:0] wn = 0;             // entries to copy: min(watched count, 256)
 reg [31:0] w_hold = 0;         // the second entry of the qword just read
@@ -227,6 +236,9 @@ always @(posedge clk) begin
 			last_seq <= m_dout[47:40];
 			cmd_seq  <= m_dout[47:40];
 			pack_ok  <= 0;
+			in_begin  <= m_dout[55:48] == 8'd1;
+			load_show <= m_dout[55:48] == 8'd1 && pct_ok;
+			load_pct  <= m_dout[38:32];
 			if (m_dout[55:48] == 8'd2) begin                       // COMMIT
 				cmd_size <= m_dout[31:0];
 				sec_bad  <= 0;
@@ -239,6 +251,11 @@ always @(posedge clk) begin
 				ack_seq <= m_dout[47:40];
 				st_t    <= ~st_t;
 			end
+		end
+		else if (in_begin && m_dout[63:56] == 8'hC5 && m_dout[55:48] == 8'd1 &&
+		         m_dout[47:40] == last_seq) begin                    // progress of that BEGIN
+			load_show <= pct_ok;
+			load_pct  <= m_dout[38:32];
 		end
 	end
 
@@ -318,8 +335,10 @@ always @(posedge clk) begin
 	endcase
 
 	if (reset) begin
-		pack_ok <= 0;
-		st      <= S_IDLE;
+		pack_ok   <= 0;
+		load_show <= 0;
+		in_begin  <= 0;
+		st        <= S_IDLE;
 	end
 end
 

@@ -129,6 +129,8 @@ module hd3_engine #(
 
 	// picture (core clock)
 	output            active,                // pack loaded and "HD Pack" on
+	output            load_show,             // (hd3_pengine only: the OSD transfer has no counter)
+	output      [6:0] load_pct,
 	output            nolimit,               // the pack's disableSpriteLimit, while active
 	output      [7:0] R,
 	output      [7:0] G,
@@ -197,6 +199,8 @@ hd3_loader_stream loader (
 );
 
 assign active  = enable & pack_ok;
+assign load_show = 1'b0;
+assign load_pct  = 7'd0;
 assign nolimit = active & options[0];
 assign list_n  = pack_ok ? hdr34[8:0] : 9'd0;    // the loader refuses more than 256
 

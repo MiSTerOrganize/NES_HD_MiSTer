@@ -10,7 +10,7 @@ HD pack engine runs on the MiSTer's ARM CPU and draws each tile and sprite the w
 
 **Status: testing build.** It is not in `update_all` yet. Things to know before installing:
 
-- The FPGA build closes timing with every slack positive (worst +0.157 ns), so the build is valid.
+- The FPGA build closes timing with every slack at +0.242 ns or more, so the build is valid.
 - The core's MiSTer framework (`fpga/sys`) is one Template_MiSTer update behind and will be refreshed.
 - All 123 packs in the collection have been converted and checked on a PC, and are installed on the
   developer's MiSTer for hardware testing. Report anything that looks or sounds wrong.
@@ -64,7 +64,9 @@ so always unzip rather than renaming the download.
 3. Set **HD Pack** to **On**.
 
 The pack is copied straight from the SD card, so even the largest packs load in a few seconds (the
-285 MB Dragon Quest III pack takes about 13 seconds the first time, less after that).
+285 MB Dragon Quest III pack takes about 13 seconds the first time, less after that). While a pack is
+loading, a **LOADING nn%** counter in the bottom-right corner of the screen shows how far it has got (not shown on the composite
+video output).
 
 - **Packs that patch the ROM restart the game.** Many packs also change the game itself (music hooks,
   fixes). The patched game has to be loaded fresh, so loading such a pack, or switching **HD Pack** Off

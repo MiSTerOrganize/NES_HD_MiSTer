@@ -149,7 +149,9 @@ module hd3_pengine #(
 
 	// picture (core clock)
 	output            active,                // pack loaded and "HD Pack" on
-	output            nolimit,               // the pack's disableSpriteLimit, while active
+	output            load_show,             // a pack copy is in progress (core clock)
+	output      [6:0] load_pct,              // its progress, 0..100
+	output            nolimit,              // the pack's disableSpriteLimit, while active
 	output      [7:0] R,
 	output      [7:0] G,
 	output      [7:0] B,
@@ -198,6 +200,7 @@ hd3_loader loader (
 	.clk(clk), .reset(reset),
 	.m_req(ld_req), .m_addr(ld_addr), .m_dout(ssc_dout), .m_ready(ld_ready),
 	.pack_ok(pack_ok), .reject(reject), .ack_seq(ld_ack_seq), .st_t(ld_st_t),
+	.load_show(load_show), .load_pct(load_pct),
 	.scale(scale), .flags(flags), .options(options), .bucket_mask(bucket_mask),
 	.max_probe(max_probe), .keys_base(keys_base), .rules_base(rules_base),
 	.hdr_word0x2c(hdr2c), .hdr_word0x30(hdr30), .hdr_word0x34(hdr34),
