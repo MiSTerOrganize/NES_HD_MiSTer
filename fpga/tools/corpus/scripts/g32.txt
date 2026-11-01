@@ -1,0 +1,35 @@
+# Zelda II (Revamp patch, a057/a058/a059): title, file select, register a name, start,
+# then palace movement, then walk out to the overworld.
+0 0
+120 START
+130 0
+200 START
+210 0
+240 A
+250 0
+260 A
+270 0
+280 A
+290 0
+330 SELECT
+340 0
+350 SELECT
+360 0
+370 SELECT
+380 0
+400 START
+410 0
+460 START
+470 0
+720 RIGHT
+780 RIGHT+A
+800 RIGHT
+820 B
+830 0
+850 LEFT
+900 LEFT+A
+920 LEFT+B
+940 LEFT
+1700 DOWN
+1800 RIGHT
+1900 0

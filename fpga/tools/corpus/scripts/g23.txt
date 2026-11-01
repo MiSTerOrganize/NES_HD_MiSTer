@@ -1,0 +1,22 @@
+# Metroid patched with a034's mmm.ips: title, file select, start, then walk/jump/shoot.
+0 0
+100 START
+160 0
+250 A
+260 0
+300 START+A
+360 0
+420 SELECT
+430 0
+480 START
+481 0
+520 START
+523 0
+840 RIGHT
+900 RIGHT+A
+930 RIGHT+B
+960 RIGHT
+1000 LEFT+B
+1040 LEFT
+1080 RIGHT+A
+1100 RIGHT

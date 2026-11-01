@@ -1,0 +1,30 @@
+# Generic corpus input (fullsim frame numbers; Mesen replays it with MESEN_INPUT_OFFSET=2):
+# two Start presses to get past a title and a menu, then walk right with A/B taps.
+# Games that need anything else get their own scripts/gNN.txt.
+0 0
+70 START
+80 0
+150 START
+160 0
+260 RIGHT
+330 RIGHT+A
+340 RIGHT
+420 RIGHT+B
+428 RIGHT
+520 RIGHT+A
+530 RIGHT
+610 LEFT
+680 LEFT+B
+688 LEFT
+760 RIGHT
+840 RIGHT+A
+850 RIGHT
+940 RIGHT+B
+948 RIGHT
+1040 UP
+1080 RIGHT
+1160 RIGHT+A
+1170 RIGHT
+1260 DOWN
+1300 RIGHT
+1400 0

@@ -9,6 +9,8 @@
 *.bin binary
 *.ogg binary
 *.ips binary
+*.bps binary
+*.ups binary
 *.hdp binary
 *.nes binary
 *.jdi binary

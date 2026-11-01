@@ -25,6 +25,11 @@ build-arm/
 __pycache__/
 *.pyc
 tools/audio/oggdecode.exe
+# Development tools (fpga/tools): source only. Simulation builds and run output are regenerated.
+fpga/tools/**/obj/
+fpga/tools/**/obj_*/
+fpga/tools/fullsim/out/
+fpga/tools/audio/oggdecode.exe
 
 *.bak
 *.orig
