@@ -172,6 +172,7 @@ assign aud_len      = h_s15len;                    // 0xFC: its length (0 = no a
 // section k = header qword 16 + k (offset [31:0], size [63:32]): it must lie inside the file and
 // be qword aligned (the engine addresses sections in qwords); every section but 15 (audio, read
 // through hd3_audio's own file-offset mapping) must also end inside the pack window.
+reg  [5:0] hq = 0;            // header qword being read (0..33)
 wire [32:0] sec_top = {1'b0, m_dout[31:0]} + {1'b0, m_dout[63:32]};
 wire        sec_err = sec_top > {1'b0, w_size} || m_dout[2:0] != 3'd0 ||
                       (hq != 6'd31 && sec_top > {1'b0, MAX_BYTES});
@@ -207,8 +208,7 @@ reg  [7:0] last_seq = 0;       // the last command carried out (or found at powe
 reg  [7:0] cmd_seq = 0;
 reg        in_begin = 0;       // the last command carried out was a BEGIN
 wire       pct_ok = m_dout[39:32] <= 8'd100;
-reg  [5:0] hq = 0;            // header qword being read (0..33)
-reg  [8:0] wi = 0;             // watch-list entry being copied
+reg  [8:0] wi = 0;            // watch-list entry being copied
 reg  [8:0] wn = 0;             // entries to copy: min(watched count, 256)
 reg [31:0] w_hold = 0;         // the second entry of the qword just read
 

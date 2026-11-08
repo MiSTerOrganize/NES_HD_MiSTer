@@ -108,7 +108,7 @@ module NES(
 	output  [7:0] cpumem_dout,
 	input   [7:0] cpumem_din,
 	output [21:0] ppumem_addr,
-	output [415:0] hd_tap_bus,     // HD pack observation tap (read-only)
+	output [511:0] hd_tap_bus,     // HD pack observation tap (read-only)
 	output        hd_chr_wr,      // HD pack: this ppumem write goes to CHR RAM (not nametables)
 	output [15:0] hd_cpu_a,       // HD pack: CPU address of the cpumem access
 	output [13:0] hd_ppu_a,       // HD pack: PPU address of the ppumem access (extra sprites incl.)
@@ -435,7 +435,11 @@ wire cpu_Instrnew;
 // 4015's output.
 wire apu_reg_cs = (apu_cs && addr[4:0] == 5'h15);
 wire [7:0] apu_reg_value = {apu_dout[7:6], internal_bus_data[5], apu_dout[4:0]}; // Fill in the undriven bit with bus.
-wire [7:0] internal_data_bus = (apu_reg_cs ? apu_reg_value : from_data_bus);
+// HD sprite extension (below): $401D reads back its bank while the extension is on
+reg       hd_ext = 0;
+reg [7:0] hd_ext_bank = 0;
+wire hd_ext_rd = hd_ext && cpu_addr == 16'h401D;
+wire [7:0] internal_data_bus = hd_ext_rd ? hd_ext_bank : (apu_reg_cs ? apu_reg_value : from_data_bus);
 
 T65 cpu(
 	.mode   (0),
@@ -603,6 +607,36 @@ always @(posedge clk) begin
 end
 
 assign joypad_out = joy_out;
+
+// HD sprite extension. Off at power-on and reset, so every other game sees an exact NES. A game
+// turns it on by writing $48 $44 $58 ("HDX") to $401C (an address nothing on a NES uses); while on:
+//   OAM attribute bit 2: the sprite's pattern comes from the 1 KB CHR bank in $401D instead of the
+//                        mapper's (any CHR-ROM mapper, cart.sv), so two sprites can show two banks
+//   OAM attribute bit 3: the sprite's colours come from a second set of 4 sprite palettes, written
+//                        through PPU $3F30-$3F3F (ppu.sv PaletteRam)
+// While on, a read of $401D returns the bank, so a game can tell this core from a NES (where it
+// reads open bus) and fall back. Neither is in savestates: a game using it rewrites both every frame.
+// (hd_ext and hd_ext_bank are declared before the CPU, whose read data uses them.)
+reg [1:0] hd_ext_seq = 0;
+wire      hd_ext_wr = cpu_ce && mw_int && !dma_aout_enable;
+always @(posedge clk) begin
+	if (reset_noSS) begin
+		hd_ext      <= 0;
+		hd_ext_seq  <= 0;
+		hd_ext_bank <= 0;
+	end else if (hd_ext_wr && addr == 16'h401C) begin
+		case (hd_ext_seq)
+			2'd0: hd_ext_seq <= (dbus == 8'h48) ? 2'd1 : 2'd0;
+			2'd1: hd_ext_seq <= (dbus == 8'h44) ? 2'd2 : (dbus == 8'h48) ? 2'd1 : 2'd0;
+			default: begin
+				hd_ext_seq <= 2'd0;
+				if (dbus == 8'h58) hd_ext <= 1;
+			end
+		endcase
+	end else if (hd_ext_wr && addr == 16'h401D && hd_ext) begin
+		hd_ext_bank <= dbus;
+	end
+end
 assign joypad_clock = {joypad2_cs && cpu_rnw, joypad1_cs && cpu_rnw};
 
 
@@ -619,6 +653,7 @@ wire mw_ppu     = mw_int && ppu_write; // Write *to* the PPU.
 wire ppu_cs = addr >= 'h2000 && addr < 'h4000;
 wire [7:0] ppu_dout;            // Data from PPU to CPU
 wire chr_read, chr_write, chr_read_ex;       // If PPU reads/writes from VRAM
+wire chr_read_alt;                           // HD sprite extension: this fetch uses hd_ext_bank
 wire [13:0] chr_addr, chr_addr_ex;           // Address PPU accesses in VRAM
 wire [7:0] chr_from_ppu;        // Data from PPU to VRAM
 wire [7:0] chr_to_ppu;
@@ -663,6 +698,8 @@ PPU ppu(
 	.hd_nolimit       (hd_nolimit),
 	.mask             (mask),
 	.chr_lin          (chr_linaddr),   // HD pack tap
+	.hd_ext           (hd_ext),        // HD sprite extension
+	.vram_alt         (chr_read_alt),
 	.hd_tap_bus       (hd_tap_bus),    // HD pack tap
 	.render_ena_out   (render_ena),
 	.evenframe        (evenframe),
@@ -739,6 +776,8 @@ cart_top multi_mapper (
 	.chr_ex            (chr_read_ex),             // Flag indicating to use extra sprite addr
 	.chr_ain_orig      (chr_addr),                // PPU address in
 	.chr_ain_ex        (chr_addr_ex),             // PPU address for extra sprites
+	.chr_alt           (chr_read_alt),            // HD sprite extension: use chr_alt_bank
+	.chr_alt_bank      (hd_ext_bank),
 	.chr_read          (chr_read),                // PPU read (inverted, active high)
 	.chr_write         (chr_write),               // PPU write (inverted, active high)
 	.chr_din           (chr_from_ppu),            // PPU data bus in (split from bid)

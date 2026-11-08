@@ -37,7 +37,7 @@ module hd_stage2
 	input             reset,          // PPU reset: frame numbering restarts at 1
 	input             enable,         // "HD Pack" on
 
-	input     [415:0] tap,
+	input     [511:0] tap,
 	input             chr_ram,        // mapper_flags[15]: the game has CHR RAM
 
 	input             ppu_wr,         // CHR RAM write (nes.v hd_chr_wr)
@@ -139,6 +139,7 @@ hd_capture #(.FP_AW(15)) u_capture
 	.line_done   (tap[114]),
 	.line_y      (tap[123:115]),
 	.pal_all     (tap[315:124]),
+	.alt_all     (tap[511:416]),
 	.px_branch_b (tap[320]),
 	.px_t        (tap[335:321]),
 	.px_finex    (tap[338:336]),

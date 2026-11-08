@@ -274,7 +274,7 @@ typedef enum bit [6:0] {
 	S_LHDR, S_LASTP, S_RA, S_RB, S_FL, S_FL1,
 	S_CW, S_CW1, S_C0, S_C0A, S_MEMO, S_C1, S_C2, S_C3, S_EVAL,
 	S_MEM, S_MEM1, S_MEM2, S_DIV,
-	S_PIX, S_HDR0, S_HDR1, S_HDR2, S_HDR3, S_SPAN, S_SPANB, S_SPR, S_SPRB, S_TM, S_FB,
+	S_PIX, S_HDR0, S_HDR1, S_HDR2, S_HDR3, S_HDR4, S_HDR5, S_SPAN, S_SPANB, S_SPR, S_SPRB, S_TM, S_FB,
 	S_TMEND, S_CDONE, S_KEEP, S_NEXT, S_LEND, S_FIN,
 	S_LN, S_LNW, S_LN1, S_LNK, S_LNK1,                // the lanes of a position's line (8a)
 	// background selection (8i)
@@ -313,7 +313,7 @@ reg   [5:0] dn;
 reg   [7:0] px, py;                 // tile/sprite at position
 reg   [7:0] b0;
 reg  [63:0] h0;
-reg [191:0] hpal;
+reg [287:0] hpal;                   // line header q1-q5: palette RAM, then the alt sprite palettes
 reg   [6:0] fi, nfet;
 reg   [2:0] ncov;
 reg  [63:0] qa;
@@ -391,7 +391,7 @@ function [4:0] lowbit(input [31:0] v);
 	end
 endfunction
 
-function [5:0] c6(input [191:0] p, input [4:0] n);
+function [5:0] c6(input [287:0] p, input [5:0] n);
 	c6 = p[6 * n +: 6];
 endfunction
 
@@ -420,9 +420,10 @@ wire [10:0] c_memo = c0[42:32];
 wire [27:3] rec_q  = REC_BASE[27:3] + {7'd0, bk, 17'd0};
 wire [27:3] line_q = rec_q + 25'h8000 + {9'd0, py, 8'd0};          // line py's header
 
-// the record's palette word, from the line's palette RAM (hdref.build_records)
-wire  [2:0] grp     = t_spr ? {1'b1, qa[47:46]} : {1'b0, qa[33:32]};
-wire  [7:0] top     = legacy ? 8'h00 : (t_spr ? 8'hFF : {2'b00, c6(hpal, 5'd0)});
+// the record's palette word, from the line's palette RAM (hdref.build_records); a sprite with
+// attribute bit 3 (HD extension) from the alt sprite palettes, entries 32-47 (as hd3_dict)
+wire  [3:0] grp     = t_spr ? {qa[49], !qa[49], qa[47:46]} : {2'b00, qa[33:32]};
+wire  [7:0] top     = legacy ? 8'h00 : (t_spr ? 8'hFF : {2'b00, c6(hpal, 6'd0)});
 wire [31:0] rec_pal = {top, 2'b00, c6(hpal, {grp, 2'd1}), 2'b00, c6(hpal, {grp, 2'd2}),
                        2'b00, c6(hpal, {grp, 2'd3})};
 wire        tm_pal  = c_ign || (t_lane ? lpal : rec_pal) == c3[31:0];
@@ -964,6 +965,16 @@ always @(posedge clk) begin
 		end
 		S_HDR3: if (fq_ack) begin
 			hpal[191:128] <= fq_q;
+			fq_req <= 1; fq_line <= 2'd3; fq_addr <= line_q + 25'd4;
+			st <= S_HDR4;
+		end
+		S_HDR4: if (fq_ack) begin
+			hpal[255:192] <= fq_q;
+			fq_req <= 1; fq_line <= 2'd3; fq_addr <= line_q + 25'd5;
+			st <= S_HDR5;
+		end
+		S_HDR5: if (fq_ack) begin
+			hpal[287:256] <= fq_q[31:0];
 			res <= 0;
 			if (c_type == 8'd3) begin
 				// tileAtPosition: the pixel's BG record, none if NoTile

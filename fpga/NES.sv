@@ -810,7 +810,7 @@ always_ff @(posedge clk) begin
 end
 
 wire nes_hblank, nes_hsync, nes_vsync, nes_vblank;
-wire [415:0] hd_tap_bus;
+wire [511:0] hd_tap_bus;
 wire         hd_nolimit;      // hd3_engine: the pack's disableSpriteLimit while its picture is on
 wire         hd_chr_wr;
 wire  [15:0] hd_cpu_a;
@@ -1263,7 +1263,8 @@ hd_reticle hd_reticle
 	.aim_x(zap_aim_x), .aim_y(zap_aim_y),
 	.hb(hd_hb), .vb(hd_vb),
 	.r_in(hd_r), .g_in(hd_g), .b_in(hd_b),
-	.r_out(hd_r_o), .g_out(hd_g_o), .b_out(hd_b_o)
+	.r_out(hd_r_o), .g_out(hd_g_o), .b_out(hd_b_o),
+	.rst(reset_nes), .bus_a(hd_bus_a), .bus_d(hd_bus_dout), .bus_wr(hd_bus_wr)
 );
 
 // "LOADING nn%" in the bottom-right corner while an HD pack is copied (hd_loadpct.sv, the same

@@ -7,6 +7,9 @@
  * with any of bytes 7-15 set, the SHA1 of the same file with those bytes 0. The patch is built
  * from the form that matched (a BPS checks its source's CRC). The staged original is never
  * changed, so a refused patch still leaves (or brings back) the file as it was loaded.
+ * Last, a rule entry (flag bit 4, 2026-11-05): the file's size and the SHA1 of one region of it,
+ * for a patch that fits every release of a game that keeps that region (Dragon Quest III
+ * Delocalized and its bank 30). The patch is built from the file as loaded.
  *
  * The build follows section 14's run list (tools/hdp3_patch.py "build"), with the checks the RTL
  * made: sizes, the run table and the data inside the section, a run mode 0-4, a TargetCopy that
@@ -90,14 +93,39 @@ static uint32_t crc32_of(const uint8_t *d, uint32_t n) {
 }
 
 /* ---------------------------------------------------------------- section 14 */
-/* the entry whose SHA1 is sha, or -1: entries in order, each wholly inside the section */
-static int search(const uint8_t *s14, uint32_t plen, const uint8_t sha[20]) {
-    if (!s14 || plen < 64) return -1;
+/* entry ek, or NULL past the table: entries in order, each wholly inside the section */
+static const uint8_t *entry_at(const uint8_t *s14, uint32_t plen, uint32_t ek) {
+    if (!s14 || plen < 64) return NULL;
     uint32_t cnt = le32(s14);
-    for (uint32_t ek = 0; ; ek++) {
-        if (ek >= cnt || ek >= 1024 || (uint64_t)ek * 64 + 128 > plen) return -1;
-        if (!memcmp(s14 + 64 + 64 * (size_t)ek, sha, 20)) return (int)ek;
+    if (ek >= cnt || ek >= 1024 || (uint64_t)ek * 64 + 128 > plen) return NULL;
+    return s14 + 64 + 64 * (size_t)ek;
+}
+
+/* the whole-file entry whose SHA1 is sha, or -1 (a rule's SHA1 names a region, not a file) */
+static int search(const uint8_t *s14, uint32_t plen, const uint8_t sha[20]) {
+    const uint8_t *e;
+    for (uint32_t ek = 0; (e = entry_at(s14, plen, ek)) != NULL; ek++)
+        if (!(e[21] & RF_F_RULE) && !memcmp(e, sha, 20)) return (int)ek;
+    return -1;
+}
+
+/* The first rule entry the file satisfies, or -1: the file is exactly the rule's size and the
+   SHA1 of its bytes off..off+len is the entry's. Tried last, so an entry naming the whole file
+   always wins. A rule without a size check is never taken, and the hashing is bounded (a
+   malformed table must not outlast the FPGA's ~1.5 s wait). */
+static int search_rule(const uint8_t *s14, uint32_t plen, const uint8_t *rom, uint32_t L) {
+    const uint8_t *e;
+    int tried = 0;
+    for (uint32_t ek = 0; (e = entry_at(s14, plen, ek)) != NULL; ek++) {
+        uint8_t h[20];
+        uint32_t off = le32(e + 56), len = le32(e + 60);
+        if (!(e[21] & RF_F_RULE) || !(e[21] & 8) || le32(e + 24) != L) continue;
+        if (len == 0 || len > RF_RULE_MAXLEN || (uint64_t)off + len > L) continue;
+        if (tried++ >= RF_RULE_MAXTRY) return -1;
+        rf_sha1(rom + off, len, h);
+        if (!memcmp(e, h, 20)) return (int)ek;
     }
+    return -1;
 }
 
 uint32_t rf_build(const uint8_t *s14, uint32_t plen, const uint8_t *e, const uint8_t *src,
@@ -186,6 +214,7 @@ int rf_decide(rf_state *st, uint64_t s, const uint8_t *rom, const uint8_t *s14, 
     if (RF_ACTIVE(s) && s14 && s14_len >= 64) {
         int ek = search(s14, s14_len, st->sha_raw), p2 = 0;
         if (ek < 0 && st->n_cand) { ek = search(s14, s14_len, st->sha_n); p2 = 1; }
+        if (ek < 0) { ek = search_rule(s14, s14_len, rom, L); p2 = 0; }
         if (ek >= 0) {
             int why;
             len = rf_build(s14, s14_len, s14 + 64 + 64 * (size_t)ek, rom, L, p2, tgt, &why);

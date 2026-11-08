@@ -30,7 +30,7 @@ Section 14 layout (little-endian; every part 64-byte aligned, offsets inside the
         0x00 sha1[20]   of the whole source file (iNES header included), as Mesen matches
         0x14 u8   base: 1 = gaps are the source, 0 = runs cover the whole target
         0x15 u8   flags: bit 0 target CRC valid, bit 1 size from the source, bit 2 truncated,
-                         bit 3 source size checked
+                         bit 3 source size checked, bit 4 a RULE
         0x16 u16  0
         0x18 u32  source size (bit 3)
         0x1C u32  target size
@@ -38,9 +38,16 @@ Section 14 layout (little-endian; every part 64-byte aligned, offsets inside the
         0x24 u32  target CRC-32 (bit 0)
         0x28 u32  runs offset   0x2C u32 run count
         0x30 u32  data offset   0x34 u32 data length
-        0x38 8 bytes 0
+        0x38 u32  rule region offset   0x3C u32 rule region length (bit 4, else 0)
     runs, 16 bytes each: u32 tgt_off, u32 len, u32 arg, u8 mode, 3 bytes 0
     data bytes
+
+A RULE (a <patchrule> line, beyond Mesen) fits every file of one exact size whose given region has
+the given SHA1: the sha1 above names that region, not the file, and bit 3 is always set. For a patch
+that only touches a part of the ROM every release of a hack keeps (Dragon Quest III Delocalized),
+so a release the pack has never seen still gets it. Rules are tried after every whole-file entry
+and the patch is built from the file as loaded. A daemon older than bit 4 compares the file's SHA1
+to the region's, never matches, and leaves the entry alone.
 
     compile_patch(patch_bytes) -> dict     raises rompatch.PatchError
     section(entries)  -> bytes             entries = [(sha1_hex, compiled), ...]
@@ -55,7 +62,7 @@ import rompatch
 from rompatch import PatchError, _vlq
 
 LIT, SRC, TGT, XOR, FILL = 0, 1, 2, 3, 4
-F_CRC, F_FROMSRC, F_TRUNC, F_SRCSIZE = 1, 2, 4, 8
+F_CRC, F_FROMSRC, F_TRUNC, F_SRCSIZE, F_RULE = 1, 2, 4, 8, 16
 
 
 def _merge(runs):
@@ -229,6 +236,13 @@ def compile_patch(patch):
     raise PatchError("unknown patch format")
 
 
+def as_rule(c, offset, length, file_size):
+    """compiled patch c as a RULE entry: files of file_size whose bytes offset..offset+length have
+    the entry's SHA1."""
+    return dict(c, flags=c["flags"] | F_RULE | F_SRCSIZE, src_size=file_size,
+                rule_off=offset, rule_len=length)
+
+
 def _pad64(b):
     return bytes(b) + bytes(-len(b) % 64)
 
@@ -247,8 +261,9 @@ def section(entries):
         doff = pos + len(body)
         body += _pad64(c["data"])
         recs.append(bytes.fromhex(sha) + struct.pack(
-            "<BBHIIIIIIII8x", c["base"], c["flags"], 0, c["src_size"], c["tgt_size"], c["trunc"],
-            c["crc"], roff, len(c["runs"]), doff, len(c["data"])))
+            "<BBHIIIIIIIIII", c["base"], c["flags"], 0, c["src_size"], c["tgt_size"], c["trunc"],
+            c["crc"], roff, len(c["runs"]), doff, len(c["data"]),
+            c.get("rule_off", 0), c.get("rule_len", 0)))
     return head + b"".join(recs) + bytes(body)
 
 
@@ -260,12 +275,12 @@ def parse(sec):
     out = []
     for k in range(n):
         e = sec[64 + 64 * k: 128 + 64 * k]
-        (base, flags, _, src_size, tgt_size, trunc, crc, roff, rn, doff, dlen) = struct.unpack_from(
-            "<BBHIIIIIIII", e, 20)
+        (base, flags, _, src_size, tgt_size, trunc, crc, roff, rn, doff, dlen, rule_off,
+         rule_len) = struct.unpack_from("<BBHIIIIIIIIII", e, 20)
         runs = [struct.unpack_from("<IIIB", sec, roff + 16 * j) for j in range(rn)]
         out.append(dict(sha1=e[:20].hex().upper(), base=base, flags=flags, src_size=src_size,
                         tgt_size=tgt_size, trunc=trunc, crc=crc, runs=runs,
-                        data=bytes(sec[doff:doff + dlen])))
+                        data=bytes(sec[doff:doff + dlen]), rule_off=rule_off, rule_len=rule_len))
     return out
 
 

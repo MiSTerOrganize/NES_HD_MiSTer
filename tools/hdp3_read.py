@@ -417,13 +417,15 @@ def read_patches(h):
         e = 64 + 64 * k
         sha = d[e:e + 20].hex().upper()
         base, flags = d[e + 20], d[e + 21]
-        (ssz, tsz, trunc, crc, roff, rn, doff, dl) = struct.unpack_from("<8I", d, e + 24)
+        (ssz, tsz, trunc, crc, roff, rn, doff, dl, rule_off, rule_len) = struct.unpack_from(
+            "<10I", d, e + 24)
         runs = []
         for j in range(rn):
             t, ln, arg = struct.unpack_from("<3I", d, roff + 16 * j)
             runs.append((t, ln, arg, d[roff + 16 * j + 12]))
         out[sha] = dict(base=base, flags=flags, src_size=ssz, tgt_size=tsz, trunc=trunc,
-                        crc=crc, runs=runs, data=bytes(d[doff:doff + dl]))
+                        crc=crc, runs=runs, data=bytes(d[doff:doff + dl]),
+                        rule_off=rule_off, rule_len=rule_len)
     return out
 
 
@@ -444,6 +446,12 @@ def check_patches(h, p, rom_path=None, romindex=None):
             want[sha] = hdp3_patch.compile_patch(p.read(name))
         except (rompatch.PatchError, FileNotFoundError):
             pass                                  # left out on purpose: loads unpatched
+    for r in p.patch_rules:
+        try:
+            want[r["sha1"]] = hdp3_patch.as_rule(hdp3_patch.compile_patch(p.read(r["file"])),
+                                                 r["offset"], r["length"], r["size"])
+        except (rompatch.PatchError, FileNotFoundError):
+            pass
     if set(got) != set(want):
         errors.append(f"patch entries {sorted(got)} vs pack {sorted(want)}")
     for sha, c in want.items():
@@ -464,10 +472,13 @@ def check_patches(h, p, rom_path=None, romindex=None):
     if rom_path:
         with open(rom_path, "rb") as f:
             rom = f.read()
-        hit = rommatch.core_lookup(rom, set(got))
+        rule_shas = {r["sha1"] for r in p.patch_rules}
+        hit = rommatch.core_lookup(rom, set(got) - rule_shas, p.patch_rules)
         if hit:
             src, sha, _label = hit
             name = rommatch.section_keys(p.patches, p.patches_md5, romindex).get(sha)
+            if name is None:
+                name = next((r["file"] for r in p.patch_rules if r["sha1"] == sha), None)
             try:
                 ref = rompatch.apply(src, p.read(name)) if name else None
             except (rompatch.PatchError, FileNotFoundError):

@@ -270,11 +270,19 @@ static void build_records(const uint8_t *rec) {
         uint64_t q0 = rd64(h);
         int nspan = (int)((q0 >> 32) & 0xFF); if (nspan > 34) nspan = 34;
         int nspr = (int)((q0 >> 48) & 0xFF); if (nspr > 64) nspr = 64;
-        uint8_t pal[32];
+        /* pal[0..31] palette RAM (header q1-q3); pal[32..47] the HD sprite extension's alt sprite
+           palettes (q4-q5), used by sprites whose attribute bit 3 is set - only a game that
+           unlocked the extension (core $401C) can set it */
+        uint8_t pal[48];
         for (int n = 0; n < 32; n++) {
             int bit = 6 * n, by = bit >> 3, sh = bit & 7;
             uint32_t v = h[8 + by] | (by + 1 < 24 ? h[9 + by] << 8 : 0);
             pal[n] = (v >> sh) & 63;
+        }
+        for (int n = 0; n < 16; n++) {
+            int bit = 6 * n, by = bit >> 3, sh = bit & 7;
+            uint32_t v = h[32 + by] | (by + 1 < 12 ? h[33 + by] << 8 : 0);
+            pal[32 + n] = (v >> sh) & 63;
         }
         memcpy(LPAL[y], pal, 32);
         uint32_t sp_lin[34], sp_psel[34]; uint64_t sp_fp[34];
@@ -328,7 +336,7 @@ static void build_records(const uint8_t *rec) {
                     uint8_t a = o_attr[i];
                     s->idx = (o_lin[i] & 0xFFFFF) >> 4; s->offy = o_lin[i] & 7; s->offx = c;
                     s->hm = (a & 0x40) != 0; s->vm = (a & 0x80) != 0; s->bgp = (a & 0x20) != 0;
-                    int q = 0x10 + 4 * (a & 3);
+                    int q = ((a & 0x08) ? 0x20 : 0x10) + 4 * (a & 3);
                     s->pal = pal[q + 3] | pal[q + 2] << 8 | pal[q + 1] << 16;
                     if (!legacy) s->pal |= 0xFF000000u;
                     s->fpv = 1; s->fp = game_ram ? o_fp[i] : 0;

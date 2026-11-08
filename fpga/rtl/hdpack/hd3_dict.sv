@@ -108,8 +108,8 @@ wire        t_line  = in_rec && t_q >= 17'h08000 && t_l[15:8] < 8'd240 && !t_l[1
 wire  [7:0] t_y     = t_l[15:8];
 wire  [7:0] t_o     = t_l[7:0];                        // qword inside the 2 KB line block
 wire        t_trl   = in_rec && t_q == 17'h1E000;      // 0xF0000: frame trailer
-// kept in the line store: header q0-q3, spans (8..75), sprite fetches 0..15 (80..111)
-wire        t_keep  = t_line && (t_o < 8'd4 || (t_o >= 8'd8 && t_o < 8'd76) ||
+// kept in the line store: header q0-q5, spans (8..75), sprite fetches 0..15 (80..111)
+wire        t_keep  = t_line && (t_o < 8'd6 ||(t_o >= 8'd8 && t_o < 8'd76) ||
                                  (t_o >= 8'd80 && t_o < 8'd112));
 
 // ------------------------------------------------------------------------------------------
@@ -254,8 +254,8 @@ assign r_frame = frame_no[r_bank];
 // ------------------------------------------------------------------------------------------
 // line processor / deduplicator
 // ------------------------------------------------------------------------------------------
-typedef enum bit [3:0] {
-	L_IDLE, L_Q0, L_Q1, L_Q2, L_Q3, I_A, I_B, I_C, K_HASH, K_I0, K_I1, K_K, K_ALLOC, K_WR, L_CLR
+typedef enum bit [4:0] {
+	L_IDLE, L_Q0, L_Q1, L_Q2, L_Q3, L_Q4, L_Q5, I_A, I_B, I_C, K_HASH, K_I0, K_I1, K_K, K_ALLOC, K_WR, L_CLR
 } lst_t;
 lst_t lst = L_IDLE;
 
@@ -264,8 +264,8 @@ reg   [1:0] slot;
 reg  [12:0] y34;                    // y * 34
 reg   [5:0] nspan;
 reg   [4:0] nfet;
-reg [191:0] pal;
-reg   [5:0] item;                   // 0..nspan-1 spans, then nspan.. fetches
+reg [287:0] pal;                    // header q1-q3 (palette RAM) and q4-q5 (HD extension alt sprite palettes)
+reg   [5:0] item;                  // 0..nspan-1 spans, then nspan.. fetches
 reg         is_spr;
 reg   [5:0] sidx;                   // span slot or fetch index
 reg  [63:0] qa;
@@ -277,14 +277,16 @@ reg [RAW:0] id_r;
 reg         inj = 0;                // the key being looked up is an injection, not a line item
 reg         clr_pend = 0;           // the index must be cleared before the next frame
 
-function [5:0] c6(input [191:0] p, input [4:0] n);
+function [5:0] c6(input [287:0] p, input [5:0] n);
 	c6 = p[6 * n +: 6];
 endfunction
 
-// key of the item, from qa (latched), qB (ls_q in I_C), the palette and the config
-wire  [2:0] grp     = is_spr ? {1'b1, qa[47:46]} : {1'b0, qa[33:32]};
+// key of the item, from qa (latched), qB (ls_q in I_C), the palette and the config. A sprite
+// with attribute bit 3 (qa[49], set only by a game that unlocked the HD extension) takes its
+// colours from the alt sprite palettes, entries 32-47.
+wire  [3:0] grp     = is_spr ? {qa[49], !qa[49], qa[47:46]} : {2'b00, qa[33:32]};
 wire [21:0] lin     = is_spr ? qa[37:16] : qa[21:0];
-wire  [7:0] top     = legacy ? 8'h00 : (is_spr ? 8'hFF : {2'b00, c6(pal, 5'd0)});
+wire  [7:0] top     = legacy ? 8'h00 : (is_spr ? 8'hFF : {2'b00, c6(pal, 6'd0)});
 wire [31:0] k_pal   = {top, 2'b00, c6(pal, {grp, 2'd1}), 2'b00, c6(pal, {grp, 2'd2}),
                        2'b00, c6(pal, {grp, 2'd3})};
 wire [63:0] k_body  = game_ram ? ls_q : {48'd0, lin[19:4]};
@@ -308,6 +310,8 @@ always @* begin
 		L_Q0:    ls_a = {slot, 7'd1};
 		L_Q1:    ls_a = {slot, 7'd2};
 		L_Q2:    ls_a = {slot, 7'd3};
+		L_Q3:    ls_a = {slot, 7'd4};
+		L_Q4:    ls_a = {slot, 7'd5};
 		I_A:     ls_a = {slot, is_spr ? 7'd80 + {sidx, 1'b0} : 7'd8 + {sidx, 1'b0}};
 		I_B:     ls_a = {slot, is_spr ? 7'd81 + {sidx, 1'b0} : 7'd9 + {sidx, 1'b0}};
 		default: ls_a = {slot, 7'd0};
@@ -330,7 +334,7 @@ always @(posedge clk) begin
 	pp_we <= 0;
 
 	// ---- tap: line readiness, frame boundaries ----
-	if (tap_v && t_line && t_o == 8'd3) begin
+	if (tap_v && t_line && t_o == 8'd5) begin       // q5: the line header's last qword
 		if (slot_ok[t_y[1:0]]) begin                     // the line 4 back was never processed
 			ovf_d <= 1;
 			fovf_d[fr_bank] <= 1;
@@ -420,8 +424,10 @@ always @(posedge clk) begin
 		end
 		L_Q1: begin pal[63:0]    <= ls_q; lst <= L_Q2; end
 		L_Q2: begin pal[127:64]  <= ls_q; lst <= L_Q3; end
-		L_Q3: begin
-			pal[191:128] <= ls_q;
+		L_Q3: begin pal[191:128] <= ls_q; lst <= L_Q4; end
+		L_Q4: begin pal[255:192] <= ls_q; lst <= L_Q5; end
+		L_Q5: begin
+			pal[287:256] <= ls_q[31:0];
 			item   <= 0;
 			is_spr <= (nspan == 0);
 			sidx   <= 0;

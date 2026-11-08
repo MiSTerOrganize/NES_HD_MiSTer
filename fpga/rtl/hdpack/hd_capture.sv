@@ -21,6 +21,9 @@
 //          [24] x = 0 was branch A   [39:32] BG span count   [47:40] sprites (valid)
 //          [55:48] sprite fetches   [63:56] y
 //       q1-q3 raw palette RAM, 32 x 6 bits, entry n at bits [6n+5:6n] of {q3,q2,q1}
+//       q4-q5 the HD sprite extension's alt sprite palettes, 16 x 6 bits, entry n at [6n+5:6n] of
+//             {q5[31:0],q4} (q5[63:32] = 0). Used for sprites whose attribute bit 3 is set; only
+//             a game that unlocked the extension (nes.v $401C) can set that bit.
 //   0x40000 + y*2048 + 64 + s*16      BG span s (fetch group, 0..33)
 //       qA [21:0] CHR linear address of the pattern fetch   [33:32] attribute palette
 //          [63] 1
@@ -72,6 +75,7 @@ module hd_capture #(
 	input       [2:0] px_emph,
 
 	input     [191:0] pal_all,                 // raw palette RAM, entry n at [6n+5:6n]
+	input      [95:0] alt_all,                 // HD extension alt sprite palettes, entry n at [6n+5:6n]
 
 	input             line_done,
 	input       [8:0] line_y,
@@ -120,6 +124,7 @@ reg  [14:0] h_t;
 reg   [2:0] h_finex, h_emph;
 reg         h_gray, h_a;
 reg [191:0] h_pal;
+reg  [95:0] h_alt;
 
 // ------------------------------------------------------------------------------------------
 // producer slots
@@ -139,13 +144,14 @@ reg         ent_q = 0;                       // next qword to send: 0 = qA, 1 = 
 reg  [27:3] ent_a;
 reg  [63:0] ent_qa, ent_qb;
 
-// line header: 4 qwords
+// line header: 6 qwords
 reg         hdr_v = 0;
-reg   [1:0] hdr_q = 0;
+reg   [2:0] hdr_q = 0;
 reg  [27:3] hdr_a;
 reg  [63:0] hdr_d0;
 reg   [7:0] hdr_be0;
 reg [191:0] hdr_pal;
+reg  [95:0] hdr_alt;
 
 // trailer
 reg         trl_v = 0;
@@ -215,7 +221,7 @@ wire d_hdr = f_space && !pix_v && ent_st != 2'd3 && hdr_v;
 wire d_trl = f_space && !pix_v && ent_st != 2'd3 && !hdr_v && trl_v;
 wire pix_busy = pix_v && !d_pix;
 wire ent_busy = (ent_st != 0) && !(d_ent && ent_q);
-wire hdr_busy = hdr_v && !(d_hdr && hdr_q == 2'd3);
+wire hdr_busy = hdr_v && !(d_hdr && hdr_q == 3'd5);
 wire trl_busy = trl_v && !d_trl;
 
 // counts including an event on the same clock as line_done (slot 33 lands at dot 256)
@@ -241,14 +247,16 @@ always @(posedge clk) begin
 			ent_q <= ~ent_q;
 		end else if (hdr_v) begin
 			case (hdr_q)
-				2'd0: fin <= {hdr_a,          hdr_d0,           hdr_be0};
-				2'd1: fin <= {hdr_a + 25'd1,  hdr_pal[63:0],    8'hFF};
-				2'd2: fin <= {hdr_a + 25'd2,  hdr_pal[127:64],  8'hFF};
-				2'd3: fin <= {hdr_a + 25'd3,  hdr_pal[191:128], 8'hFF};
+				3'd0: fin <= {hdr_a,          hdr_d0,                  hdr_be0};
+				3'd1: fin <= {hdr_a + 25'd1,  hdr_pal[63:0],           8'hFF};
+				3'd2: fin <= {hdr_a + 25'd2,  hdr_pal[127:64],         8'hFF};
+				3'd3: fin <= {hdr_a + 25'd3,  hdr_pal[191:128],        8'hFF};
+				3'd4: fin <= {hdr_a + 25'd4,  hdr_alt[63:0],           8'hFF};
+				default: fin <= {hdr_a + 25'd5, 32'd0, hdr_alt[95:64], 8'hFF};
 			endcase
 			fpush <= 1;
 			hdr_q <= hdr_q + 1'd1;
-			if (hdr_q == 2'd3) hdr_v <= 0;
+			if (hdr_q == 3'd5) hdr_v <= 0;
 		end else if (trl_v) begin
 			fin   <= {trl_a, trl_d, 8'hFF};
 			fpush <= 1;
@@ -302,7 +310,7 @@ always @(posedge clk) begin
 				end
 			end
 			// palette cannot change while rendering; snapshot it on any rendered dot
-			if (!px_branch_b && (px_bg_on || px_spr_on)) h_pal <= pal_all;
+			if (!px_branch_b && (px_bg_on || px_spr_on)) begin h_pal <= pal_all; h_alt <= alt_all; end
 		end
 
 		// ---- BG span / sprite entries ----
@@ -335,6 +343,7 @@ always @(posedge clk) begin
 				            7'd0, h_a, 2'd0, h_emph, h_gray, h_finex, h_t};
 				hdr_be0 <= h_a ? 8'hFF : 8'hF8;
 				hdr_pal <= h_pal;
+				hdr_alt <= h_alt;
 			end
 			cnt_span      <= 0;
 			cnt_spr       <= 0;

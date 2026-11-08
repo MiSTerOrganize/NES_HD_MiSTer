@@ -222,6 +222,7 @@ class HdPack:
         # an MD5 where Mesen wants a SHA1, and a file name corrected by pack_fixes.py. They are
         # NOT in self.patches (that stays exactly Mesen's set) and each is listed in self.compat.
         self.patches_md5 = {}             # MD5 (upper) -> file
+        self.patch_rules = []             # <patchrule> lines, rommatch.rule_hit's dicts
         self.compat = []                  # (line, what was done beyond Mesen)
         self.bgm = {}                     # id -> (file, loop_position)
         self.sfx = {}                     # id -> file
@@ -389,6 +390,8 @@ class _Loader:
             p.overscan = tuple(stoi(self.tok(t, i, "overscan")) for i in range(4))
         elif line[:7] == "<patch>":
             self.patch_tag(split(line[7:]))
+        elif line[:11] == "<patchrule>":
+            self.patch_rule_tag(split(line[11:]))
         elif line[:9] == "<options>":
             for token in split(line[9:]):
                 opt = {"disableSpriteLimit": OPT_NO_SPRITE_LIMIT,
@@ -760,6 +763,19 @@ class _Loader:
             return
         self.check(self.p.has(tokens[0]), "Patch file not found: " + tokens[1])
         self.p.patches[tokens[1].upper()] = tokens[0]
+
+    def patch_rule_tag(self, tokens):
+        """<patchrule>file,region sha1,offset,length,file size (the last three hex): the core's
+        own line, beyond Mesen (rommatch.py). Mesen ignores the tag, so a pack with one is for
+        the core only; a bad line is an error here rather than a patch that silently never fits."""
+        self.check(len(tokens) == 5, "Patchrule tag needs file,sha1,offset,length,size")
+        self.check(len(tokens[1]) == 40, f"Invalid SHA1 hash for patch rule ({tokens[0]}): {tokens[1]}")
+        self.check(self.p.has(tokens[0]), "Patch file not found: " + tokens[0])
+        offset, length, size = (int(t, 16) for t in tokens[2:5])
+        self.check(length > 0 and offset + length <= size, f"Patch rule region outside the file: {tokens[0]}")
+        self.p.patch_rules.append(dict(file=tokens[0], sha1=tokens[1].upper(), offset=offset,
+                                       length=length, size=size))
+        self.p.compat.append((self.line, f"<patchrule> {tokens[0]}: core only, beyond Mesen"))
 
     def _fixed_patch_name(self, name, digest):
         """pack_fixes.py's corrected file for a <patch> line naming a file the pack lacks, when

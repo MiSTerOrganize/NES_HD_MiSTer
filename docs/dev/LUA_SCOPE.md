@@ -96,6 +96,26 @@ for Dragon Warrior III (USA).
   side by side on random input - 4 seeds, 200,000 frames, all 19 backdrops, no difference; 9 of 9
   planted bugs caught. Mesen A/B on the real game (3,600 and 7,000 frames): the patched ROM
   writes the same $7C5-$7C9 bytes as the Lua on every frame.
+
+## Later: any release, and the minimap marker (2026-11-05)
+
+- v1.15 replaced v1.14 and the old patch left its host, so whole-file SHA-1 lines alone would have
+  sent members to a hex editor. Owner's decision: any release must work, past and future. Bank 30
+  is byte-identical in the USA ROM, v1.13, v1.14, v1.15 and every optional patch combination
+  measured (32 of 32), so the pack now also carries a rule: a 524,304-byte file whose bank 30
+  (file offset $78010, 16 KB) has this SHA-1 gets the patch, whatever else it holds. The whole-file
+  lines stay for a daemon older than the rule. The USA ROM matches too, deliberately.
+- What the rule cannot promise: it checks the sound bank only. A release that changes bank 30 or
+  the ROM size does not match. A release that moves $2A, $2B or the other values the patch reads
+  would match and misbehave. v1.15 was checked by comparison: it changes 182 bytes in banks 2 and 4,
+  no instruction near them touches $2A, $2B or $07C5, and the reference counts are unchanged.
+- The marker (item 4 above) is done: the sprite route was rejected (the map image sits in front of
+  every sprite), so the patch works out the Lua's position and blink and writes them to four core
+  registers, $4108-$410B, and rtl/hd_reticle.sv draws the 4 x 4 rectangle on top of the HD picture.
+  An older RBF ignores the writes and shows the map with no marker. Checked against the Lua's own
+  rectangle for every coordinate on both maps and both colours (test_dq3_hd_patch.py, 14 planted
+  bugs in neg_dq3_marker.py) and pixel by pixel on ModelSim (tools/sim3/tb_marker.sh, 13 mutants).
+  Compared with the Lua, not yet with the map on hardware.
 - Pack: zz_var/dq3hd_a064 (tools/corpus/make_dq3_hd_overlay.py) = a064 with the script line
   dropped and three <patch> lines (shipped ROM, v1.14 iNES 1.0 form, DAT v1.13 [n]). It replaces
   p071 in the ship plan.

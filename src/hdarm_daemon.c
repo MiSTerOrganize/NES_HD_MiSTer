@@ -453,9 +453,25 @@ static void *loader(void *arg) {
    mailbox: the list lands before the mailbox moves. */
 static void publish(volatile uint8_t *lists, volatile uint8_t *mbox, uint32_t fid,
                     const uint64_t *dl, size_t nq) {
+    /* Published in pieces: the mailbox count is raised after every PUB_CHUNK qwords, and the
+       painter reads only what has been published, waiting for the rest (hd3_paint list_end).
+       A whole list is up to ~280 KB and takes 1-2 ms to copy into DDR3; announcing it only at
+       the end made most frames start painting after vblank (~1.4 ms) was over, and a frame
+       whose painting starts after its first visible line is shown black. Measured with
+       hdprobe on DQ3: 81 of 1202 frames had no list in time. */
+    enum { PUB_CHUNK = 2048 };                     /* qwords, a multiple of 8 */
     size_t np = (nq + 7) & ~(size_t)7;
     volatile uint8_t *lb = lists + (fid & 3) * LIST_LEN;
-    memcpy((void *)lb, dl, nq * 8);
+    size_t done = 0;
+    while (done < nq) {
+        size_t n = nq - done < PUB_CHUNK ? nq - done : PUB_CHUNK;
+        memcpy((void *)(lb + done * 8), dl + done, n * 8);
+        done += n;
+        if (done < nq) {                           /* a full chunk: announce it */
+            __sync_synchronize();
+            wr64(mbox, 0xA5ull << 56 | (uint64_t)done << 32 | fid);
+        }
+    }
     memset((void *)(lb + nq * 8), 0, (np - nq) * 8);
     __sync_synchronize();
     wr64(mbox, 0xA5ull << 56 | (uint64_t)np << 32 | fid);
@@ -465,9 +481,9 @@ static void publish(volatile uint8_t *lists, volatile uint8_t *mbox, uint32_t fi
  * The scan-out has no frame buffer, only an 8-line ring (hd3_scanout.sv): a frame whose list has
  * not been published by the time it is shown is BLACK. A frame whose decisions take longer than a
  * frame period (heavy packs: Mega Man Super spikes to 30+ ms) would flash black. The pacer, on
- * core 1, watches the frame records; when a new record appears while the main thread is still
- * deciding, nobody would publish for that frame, so it publishes the last list again under a new
- * frame id. The FPGA then paints the previous picture once more: a late frame is held for a frame
+ * core 1, watches the frame records; when a new record appears and the main thread has not
+ * published within PACER_WAIT, nobody would publish for that frame, so it publishes the last list
+ * again under a new frame id. The FPGA then paints the previous picture once more: a late frame is held for a frame
  * instead of going black. The main thread's list still goes out the moment it is ready.
  * All publishing (main thread and pacer) goes through g_pub_lock, which owns g_fid and the copy
  * of the last published list. */
@@ -487,6 +503,7 @@ static uint32_t newest_record(volatile uint8_t *recs, uint32_t *bank) {
     return F;
 }
 static uint32_t g_fid;                       /* last frame id published (under g_pub_lock) */
+#define PACER_WAIT 0.3                       /* ms after a new record before the pacer steps in */
 static uint64_t *g_last;                     /* the last published list (under g_pub_lock) */
 static size_t g_last_nq;
 static int g_have_last;                      /* g_last belongs to the current pack */
@@ -517,20 +534,30 @@ static void *pacer(void *arg) {
     while (!g_stop) {
         uint32_t nb, N = newest_record(g_recs, &nb);
         if (N > seen) {
+            /* A new record: the start of vblank. If the main thread has not published by
+               PACER_WAIT, publish the last list again, whatever the main thread is doing (deciding,
+               copying its decided list aside, waiting for watched values, printing stats). Only
+               covering "main is deciding" left ~1 frame in 10 with no list on DQ3 (hdprobe), and
+               a frame with no list is black. */
             seen = N;
-            if (g_busy) {
-                pthread_mutex_lock(&g_pub_lock);
-                if (g_have_last && g_busy) {
-                    g_fid++; if (!g_fid) g_fid = 1;
-                    publish(g_lists, g_mbox, g_fid, g_last, g_last_nq);
-                    g_held++;
-                }
-                pthread_mutex_unlock(&g_pub_lock);
+            uint32_t f0 = __atomic_load_n(&g_fid, __ATOMIC_ACQUIRE);
+            double t0 = now_ms();
+            /* deciding: it cannot publish for this frame, so do it now; otherwise give it
+               PACER_WAIT to publish its decided list */
+            while (!g_stop && !g_busy && __atomic_load_n(&g_fid, __ATOMIC_ACQUIRE) == f0 &&
+                   now_ms() - t0 < PACER_WAIT)
+                usleep(50);
+            pthread_mutex_lock(&g_pub_lock);
+            if (g_have_last && g_fid == f0) {        /* still nobody: hold the last picture */
+                g_fid++; if (!g_fid) g_fid = 1;
+                publish(g_lists, g_mbox, g_fid, g_last, g_last_nq);
+                g_held++;
             }
+            pthread_mutex_unlock(&g_pub_lock);
         } else if (N < seen) {
             seen = N;                        /* the NES was reset: frame numbers restarted */
         }
-        usleep(250);
+        usleep(50);
     }
     return NULL;
 }
@@ -576,7 +603,7 @@ int main(int argc, char **argv) {
     uint32_t gen = 0, last = 0, nw = 0;
     int refused = 0;                   /* the pack of generation gen was refused */
     wr64(mbox, 0);                                     /* nothing published */
-    double t_copy = 0, t_dec = 0, t_pub = 0, t_worst = 0;
+    double t_copy = 0, t_dec = 0, t_pub = 0, t_worst = 0, t_hpub = 0;
     unsigned n = 0, skipped = 0, torn = 0;
     size_t maxq = 0;
 
@@ -615,18 +642,24 @@ int main(int argc, char **argv) {
             forget_last();
             fprintf(stderr, "hdarm: the game was reset, frame records restarted at %u\n", F);
         }
-        if (F <= last || (F & 1) != b) { usleep(500); continue; }
+        if (F <= last || (F & 1) != b) { usleep(200); continue; }
+        double t0 = now_ms();
+        if (have_held) {
+            /* --lag 1: F-1's list goes out first, the moment record F exists. It does not depend
+               on F's watched values, so it must not wait for them: the painter has to start
+               within the ~1.4 ms of vblank, and a list that arrives after the first visible line
+               is painted for the frame after, leaving this one black (the flicker on packs with
+               memory conditions). */
+            publish_main(held, held_nq);
+            have_held = 0;
+            t_hpub = now_ms() - t0;
+        }
         volatile uint8_t *bank = recs + b * REC_LEN;
         uint8_t vals[256] = {0};
         if (nw) {
             uint64_t mk = rd64(bank + WMRK);
-            if ((uint32_t)mk != F) { usleep(200); continue; }   /* values not copied yet */
+            if ((uint32_t)mk != F) { usleep(100); continue; }   /* values not copied yet */
             fetch(vals, bank + WVAL, 256);
-        }
-        double t0 = now_ms();
-        if (have_held) {                               /* --lag 1: F-1's list goes out first */
-            publish_main(held, held_nq);
-            have_held = 0;
         }
         double tp = now_ms();
         g_busy = 1;                                    /* from here a new record finds us busy */
@@ -648,8 +681,9 @@ int main(int argc, char **argv) {
             publish_main(dl, nq);
         }
         double t3 = now_ms();
-        t_copy += t1 - tp; t_dec += t2 - t1; t_pub += (tp - t0) + (t3 - t2);
-        if (t3 - t0 > t_worst) t_worst = t3 - t0;
+        t_copy += t1 - tp; t_dec += t2 - t1; t_pub += t_hpub + (t3 - t2);
+        if (t_hpub + (t3 - tp) > t_worst) t_worst = t_hpub + (t3 - tp);
+        t_hpub = 0;
         if (np > maxq) maxq = np;
         n++;
         if (once) break;

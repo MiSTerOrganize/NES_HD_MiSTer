@@ -10,7 +10,7 @@ HD pack engine runs on the MiSTer's ARM CPU and draws each tile and sprite the w
 
 **Status: testing build.** It is not in `update_all` yet. Things to know before installing:
 
-- The FPGA build closes timing with every slack at +0.242 ns or more, so the build is valid.
+- The FPGA build closes timing with every slack positive; the smallest is +0.138 ns, on the HDMI clock.
 - The core's MiSTer framework (`fpga/sys`) is one Template_MiSTer update behind and will be refreshed.
 - All 123 packs in the collection have been converted and checked on a PC, and are installed on the
   developer's MiSTer for hardware testing. Report anything that looks or sounds wrong.
@@ -31,7 +31,7 @@ HD pack engine runs on the MiSTer's ARM CPU and draws each tile and sprite the w
 Copy these to the SD card:
 
 ```
-_Other/NES_HD_20261031.rbf          ->  /media/fat/_Other/
+_Other/NES_HD_20261107.rbf          ->  /media/fat/_Other/
 games/NES_HD/NES_HD                 ->  /media/fat/games/NES_HD/
 games/NES_HD/_handler.sh            ->  /media/fat/games/NES_HD/
 games/NES_HD/Palette/               ->  /media/fat/games/NES_HD/Palette/   (optional palettes)

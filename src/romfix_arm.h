@@ -20,6 +20,10 @@ extern "C" {
 #define RF_ST_OFF  0x0C400040u        /* status qword; command at + 8 */
 #define RF_CMD_OFF 0x0C400048u
 
+#define RF_F_RULE      16u            /* entry flag: its SHA1 names a region (u32 offset, u32 length at 0x38) */
+#define RF_RULE_MAXLEN 0x100000u      /* a rule hashes at most 1 MB ... */
+#define RF_RULE_MAXTRY 4              /* ... and at most this many rules are hashed per decision */
+
 typedef struct {
     int     have;                     /* a status has been decided on */
     uint8_t rseq, aseq;               /* the status last decided on */

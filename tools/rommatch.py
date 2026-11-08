@@ -22,15 +22,34 @@ rejects it. The core has no MD5, so the converter turns such a line into SHA1 en
 ROM library (resolve_md5); tools that hold the ROM itself match the MD5 directly (find). Both
 give the same answer for a library ROM.
 
+Last, a <patchrule> line (2026-11-05, user decision "any version, and beyond if new patches come
+out"): a file of one exact size with a given SHA1 over one region of it. It is for a patch that
+only changes a part every release of a hack keeps, and it is tried after every whole-file line.
+The patch applies to the file as it is. It cannot promise more than the region: a release that
+changes the region does not match, and one that moves game RAM the patch reads would match and
+misbehave.
+
     ines1(d)            -> the iNES 1.0 form of d, or None (no iNES header, or already that form)
     forms(d)            -> [(label, bytes)] in match order: the file, then its iNES 1.0 form
-    find(d, sha1s, md5s)-> (source bytes, patch file, label) or None
+    find(d, sha1s, md5s, rules)-> (source bytes, patch file, label) or None
+    rule_hit(d, rules)  -> the first rule d satisfies, or None
 """
 import hashlib
 
 INES_MAGIC = b"NES\x1a"
 FORM_RAW = ""
 FORM_INES1 = " (iNES 1.0 header)"
+FORM_RULE = " (patch rule)"
+
+
+def rule_hit(d, rules):
+    """The first of rules ({sha1, offset, length, size, file}) file d satisfies, or None."""
+    for r in rules or ():
+        if (len(d) == r["size"] and r["length"] and r["offset"] + r["length"] <= len(d) and
+                hashlib.sha1(d[r["offset"]:r["offset"] + r["length"]]).hexdigest().upper()
+                == r["sha1"].upper()):
+            return r
+    return None
 
 
 def ines1(d):
@@ -51,30 +70,34 @@ def forms(d):
     return out
 
 
-def find(d, sha1s, md5s=None):
+def find(d, sha1s, md5s=None, rules=None):
     """The <patch> to apply to ROM file d. sha1s / md5s: {hash upper: patch file}. The file is
     tried before its iNES 1.0 form, and in each form SHA1 before MD5 - the order the core's two
-    hash passes give (MD5 lines reach the core as SHA1 entries of the same form)."""
+    hash passes give (MD5 lines reach the core as SHA1 entries of the same form). Rules last."""
     md5s = md5s or {}
+    d = bytes(d)
     for label, c in forms(d):
         name = sha1s.get(hashlib.sha1(c).hexdigest().upper())
         if name is None:
             name = md5s.get(hashlib.md5(c).hexdigest().upper())
         if name is not None:
             return c, name, label
-    return None
+    r = rule_hit(d, rules)
+    return (d, r["file"], FORM_RULE) if r else None
 
 
-def core_lookup(d, entry_shas):
-    """What the core does with section 14 (hd3_romfix.sv): hash the file, look it up; if no
-    entry names it and the file has an iNES header, hash its iNES 1.0 form and look again.
-    entry_shas: SHA1s (upper) the section's entries carry. -> (source form, sha, label) or None.
-    The patch is built from the form that matched."""
+def core_lookup(d, entry_shas, rules=None):
+    """What the core does with section 14 (romfix_arm.c): hash the file, look it up; if no
+    entry names it and the file has an iNES header, hash its iNES 1.0 form and look again; then
+    the rules. entry_shas: SHA1s (upper) the whole-file entries carry; rules: as rule_hit.
+    -> (source form, sha, label) or None. The patch is built from the form that matched."""
+    d = bytes(d)
     for label, c in forms(d):
         sha = hashlib.sha1(c).hexdigest().upper()
         if sha in entry_shas:
             return c, sha, label
-    return None
+    r = rule_hit(d, rules)
+    return (d, r["sha1"].upper(), FORM_RULE) if r else None
 
 
 def section_keys(patches, patches_md5, index_rows):

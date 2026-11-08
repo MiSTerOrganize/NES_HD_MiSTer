@@ -681,6 +681,14 @@ class Converter:
                 ents.append((sha.lower(), hdp3_patch.compile_patch(self.p.read(name))))
             except (rompatch.PatchError, FileNotFoundError) as e:
                 self.warn(f"<patch> {name}: {e}; that ROM will load unpatched")
+        for r in self.p.patch_rules:
+            # after the whole-file entries: the core tries them last in any case (romfix_arm.c)
+            try:
+                ents.append((r["sha1"].lower(), hdp3_patch.as_rule(
+                    hdp3_patch.compile_patch(self.p.read(r["file"])), r["offset"], r["length"],
+                    r["size"])))
+            except (rompatch.PatchError, FileNotFoundError) as e:
+                self.warn(f"<patchrule> {r['file']}: {e}; left out")
         for line, what in self.p.compat:
             self.warn(f"line {line}: {what}")
         self.patch_section = hdp3_patch.section(ents) if ents else b""
@@ -751,6 +759,13 @@ class Converter:
                           or p.options & M.OPT_AUTOMATIC_FALLBACK_TILES)
         if self.chr_ram_game is None and needs_type:
             raise Refused("pack mixes CHR-RAM and CHR-ROM keys; give the ROM with --rom")
+        if self.chr_ram_game is None:
+            # The ARM decisions (hdarm4.c hd_setup) refuse a pack that does not say whether the
+            # game is CHR-RAM (header flag 0x20), and the core then shows a black screen. A pack
+            # with no tile or addition keys (backgrounds only, or HD audio only) cannot say it
+            # from the pack, so the ROM has to.
+            raise Refused("cannot tell whether the game is CHR-RAM (the pack has no tile or "
+                          "addition keys); give the ROM with --rom")
         if (self.chr_ram_game is False and self.rom is None
                 and p.options & M.OPT_AUTOMATIC_FALLBACK_TILES):
             raise Refused("CHR-ROM game with automaticFallbackTiles; give the ROM with --rom")
@@ -861,9 +876,9 @@ def patch_rom(d, pack, notes=None):
     lines as well as SHA1 ones. The last two go beyond Mesen and are reported."""
     import rompatch
     import rommatch
-    if not (pack.patches or pack.patches_md5):
+    if not (pack.patches or pack.patches_md5 or pack.patch_rules):
         return d
-    hit = rommatch.find(d, pack.patches, pack.patches_md5)
+    hit = rommatch.find(d, pack.patches, pack.patches_md5, pack.patch_rules)
     if hit:
         cand, name, label = hit
         try:

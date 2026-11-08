@@ -44,6 +44,8 @@ module cart_top (
 	input       [7:0] chr_din,        // PPU Data In
 	input      [13:0] chr_ain_orig,   // Better known as "PPU Address in"
 	input      [13:0] chr_ain_ex,     // Address for extra sprite fetches
+	input             chr_alt,        // HD sprite extension: this sprite fetch reads chr_alt_bank
+	input       [7:0] chr_alt_bank,   // HD sprite extension: 1 KB CHR-ROM bank
 	output reg [21:0] chr_aout,       // CHR Input / Output Address Lines
 	output reg  [7:0] chr_dout,       // Value to override CHR data with
 	output reg        has_chr_dout,   // True if CHR data should be overridden
@@ -2542,6 +2544,12 @@ always @* begin
 	// Address translation for SDRAM
 	if ((prg_aout[21] == 1'b0) && (prg_aout[24] == 1'b0))
 		prg_aout[20:0] = {(prg_aout[20:11] & prg_mask[9:0]), prg_aout[10:0]};
+
+	// HD sprite extension (nes.v): a sprite pattern fetch flagged by the PPU reads the 1 KB CHR-ROM
+	// bank chr_alt_bank instead of the mapper's. Only for CHR-ROM carts; the mapper still sees the
+	// PPU's address unchanged (its A12 IRQ counter included).
+	if (chr_alt && !chr_ain[13] && chr_aout[21:20] == 2'b10)
+		chr_aout = {4'b1000, chr_alt_bank, chr_ain[9:0]};
 
 	if (chr_aout[21:20] == 2'b10)
 		chr_aout[19:0] = {(chr_aout[19:11] & chr_mask[8:0]), chr_aout[10:0]};

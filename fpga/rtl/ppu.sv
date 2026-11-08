@@ -378,11 +378,12 @@ module Sprite(
 	input counting,
 	input rendering,
 	input [3:0] load,
-	input [26:0] load_in,
-	output [26:0] load_out,
-	output [4:0] bits // Low 4 bits = pixel, high bit = prio
+	input [27:0] load_in,
+	output [27:0] load_out,
+	output [5:0] bits // Low 4 bits = pixel, bit 4 = prio, bit 5 = HD extension alt palette
 );
 
+reg altp;              // HD extension: attribute bit 3 (always 0 unless the extension is unlocked)
 reg [1:0] upper_color; // Upper 2 bits of color
 reg [7:0] x_coord;     // X coordinate where we want things
 reg [7:0] pix1, pix2;  // Shift registers, output when x_coord == 0
@@ -400,10 +401,10 @@ always @(posedge clk) if (ce) begin
 	if (load[3]) pix1 <= load_in[26:19];
 	if (load[2]) pix2 <= load_in[18:11];
 	if (load[1]) x_coord <= load_in[10:3];
-	if (load[0]) {upper_color, aprio} <= load_in[2:0];
+	if (load[0]) {altp, upper_color, aprio} <= {load_in[27], load_in[2:0]};
 end
-assign bits = {aprio, upper_color, active && pix2[0], active && pix1[0]};
-assign load_out = {pix1, pix2, x_coord, upper_color, aprio};
+assign bits = {altp, aprio, upper_color, active && pix2[0], active && pix1[0]};
+assign load_out = {altp, pix1, pix2, x_coord, upper_color, aprio};
 
 endmodule  // SpriteGen
 
@@ -418,20 +419,20 @@ module SpriteSet(
 	input rendering,        // Set to 1 if rendering is enabled
 	input [3:0] load,       // Which parts of the state to load/shift.
 	input [3:0] load_ex,    // Which parts of the state to load/shift for extra sprites.
-	input [26:0] load_in,   // State to load with
-	input [26:0] load_in_ex,// Extra spirtes
-	output [4:0] bits,      // Output bits
+	input [27:0] load_in,   // State to load with
+	input [27:0] load_in_ex,// Extra spirtes
+	output [5:0] bits,      // Output bits (bit 5: HD extension alt palette)
 	output is_sprite0,       // Set to true if sprite #0 was output
 	input extra_sprites
 );
 
-wire [26:0] load_out7, load_out6, load_out5, load_out4, load_out3, load_out2, load_out1, load_out0,
+wire [27:0] load_out7, load_out6, load_out5, load_out4, load_out3, load_out2, load_out1, load_out0,
 	load_out15, load_out14, load_out13, load_out12, load_out11, load_out10, load_out9, load_out8;
-wire [4:0] bits7, bits6, bits5, bits4, bits3, bits2, bits1, bits0,
+wire [5:0] bits7, bits6, bits5, bits4, bits3, bits2, bits1, bits0,
 	bits15, bits14, bits13, bits12, bits11, bits10, bits9, bits8;
 
-wire [26:0] load_head    = rendering ? load_in    : load_out0;
-wire [26:0] load_head_ex = rendering ? load_in_ex : load_out8;
+wire [27:0] load_head    = rendering ? load_in    : load_out0;
+wire [27:0] load_head_ex = rendering ? load_in_ex : load_out8;
 
 // Extra sprites
 Sprite sprite15(clk, ce, enable, counting, rendering, load_ex, load_head_ex, load_out15, bits15);
@@ -455,7 +456,7 @@ Sprite sprite0( clk, ce, enable, counting, rendering, load, load_out1,  load_out
 
 // Determine which sprite is visible on this pixel.
 assign bits = bits_orig;
-wire [4:0] bits_orig =
+wire [5:0] bits_orig =
 	bits0[1:0]  != 0 ? bits0 :
 	bits1[1:0]  != 0 ? bits1 :
 	bits2[1:0]  != 0 ? bits2 :
@@ -466,7 +467,7 @@ wire [4:0] bits_orig =
 	bits7[1:0]  != 0 || ~extra_sprites ? bits7 :
 	bits_ex;
 
-wire [4:0] bits_ex =
+wire [5:0] bits_ex =
 	bits8[1:0]  != 0 ? bits8 :
 	bits9[1:0]  != 0 ? bits9 :
 	bits10[1:0] != 0 ? bits10 :
@@ -502,6 +503,7 @@ module OAMEval(
 	output in_range,
 	output masked_sprites,     // If the game is trying to mask extra sprites
 	input mesen_limit,         // HD pack disableSpriteLimit: Mesen's adaptive rule decides the masking
+	input ext_on,              // HD sprite extension unlocked ($401C): attribute bits 2-3 are kept
 	input is_pre_render,
 	// savestates
 	input [63:0]  SaveStateBus_Din,
@@ -528,6 +530,7 @@ eReg_SavestateV #(SSREG_INDEX_OAMEVAL, SSREG_DEFAULT_OAMEVAL) iREG_SAVESTATE (cl
 
 assign oam_bus = oam_data;
 wire [7:0] oam_dbus = oam_data_write ? oam_din : oam_data;
+wire [7:0] attr_mask = ext_on ? 8'hEF : 8'hE3;
 
 enum {
 	STATE_IDLE,
@@ -771,7 +774,7 @@ end else if (ce) begin
 
 				//On even cycles, data is read from (primary) OAM
 				if (!secondary_write) begin
-					oam_data <= is_pre_render ? oam_temp[oam_secondary_addr] : (oam[oam_read_addr] & (is_attr_byte ? 8'hE3 : 8'hFF));
+					oam_data <= is_pre_render ? oam_temp[oam_secondary_addr] : (oam[oam_read_addr] & (is_attr_byte ? attr_mask : 8'hFF));
 				end else begin
 					if (oam_wr_enabled && ~n_ovr) // The Attr byte of secondary OAM is NOT missing bits 4:2
 						oam_temp[oam_secondary_addr] <= oam_dbus;
@@ -888,7 +891,7 @@ end else if (ce) begin
 	// writes during rendering.
 	if (oam_data_write) begin
 		if (~rendering) begin
-			oam[oam_read_addr] <= (is_attr_byte) ? (oam_din & 8'hE3) : oam_din; // attr has no bits 2-4
+			oam[oam_read_addr] <= (is_attr_byte) ? (oam_din & attr_mask) : oam_din; // attr has no bits 2-4 (2-3 kept when the HD extension is unlocked; bit 4 never, the extra sprites use it as their dummy mark)
 			oam_data <= oam_din;
 			oam_addr <= oam_addr + 1'b1;
 		end else begin
@@ -928,9 +931,12 @@ module SpriteAddressGen(
 	output [12:0] vram_addr,// Low bits of address in VRAM that we'd like to read.
 	input [7:0] vram_data,  // Byte of VRAM in the specified address
 	output [3:0] load,      // Which subset of load_in that is now valid, will be loaded into SpritesGen.
-	output [26:0] load_in,  // Bits to load into SpritesGen.
-	output        is_dummy  // HD pack: current fetch is a dummy (sprite not in range)
+	output [27:0] load_in,  // Bits to load into SpritesGen.
+	output        is_dummy, // HD pack: current fetch is a dummy (sprite not in range)
+	output        alt_bank  // HD extension: attribute bit 2 of the sprite being fetched
 );
+reg alt_b;
+assign alt_bank = alt_b;
 reg [2:0] count;
 reg [7:0] temp_tile;    // Holds the tile that we will get
 reg [3:0] temp_y;       // Holds the Y coord (will be swapped based on FlipY).
@@ -952,7 +958,7 @@ wire [7:0] vram_f =
 
 wire [3:0] y_f = temp_y ^ {flip_y, flip_y, flip_y, flip_y};
 assign load = {load_pix1, load_pix2, load_x, load_attr};
-assign load_in = {vram_f, vram_f, temp, temp[1:0], temp[5]};
+assign load_in = {temp[3], vram_f, vram_f, temp, temp[1:0], temp[5]};
 
 // If $2000.5 = 0, the tile index data is used as usual, and $2000.3
 // selects the pattern table to use. If $2000.5 = 1, the MSB of the range
@@ -970,7 +976,7 @@ always @(posedge clk) if (ce) begin
 
 	if (load_y) begin temp_y <= scanline_y[3:0]; dummy_sprite <= ~in_range; end
 	if (load_tile) temp_tile <= temp;
-	if (load_attr) {flip_y, flip_x} <= {temp[7:6]};
+	if (load_attr) {flip_y, flip_x, alt_b} <= {temp[7:6], temp[2]};
 	end
 
 endmodule  // SpriteAddressGen
@@ -989,10 +995,11 @@ module SpriteAddressGenEx(
 	input [7:0] vram_data,  // Byte of VRAM in the specified address
 	output [12:0] vram_addr,// Low bits of address in VRAM that we'd like to read.
 	output [3:0] load,      // Which subset of load_in that is now valid, will be loaded into SpritesGen.
-	output [26:0] load_in,  // Bits to load into SpritesGen.
+	output [27:0] load_in,  // Bits to load into SpritesGen.
 	output use_ex,          // If extra sprite address should be used
 	input masked_sprites,
-	output is_dummy         // HD pack: this extra sprite draws nothing (the vram_f zeroing condition)
+	output is_dummy,        // HD pack: this extra sprite draws nothing (the vram_f zeroing condition)
+	output alt_bank         // HD extension: attribute bit 2 of the sprite being fetched
 );
 reg [2:0] count;
 
@@ -1026,7 +1033,8 @@ wire [7:0] vram_f =
 
 wire [3:0] y_f = temp_y[3:0] ^ {flip_y, flip_y, flip_y, flip_y};
 assign load = {load_pix1, load_pix2, load_x, load_attr};
-assign load_in = {pix1_latch, pix2_latch, load_temp, load_temp[1:0], load_temp[5]};
+assign load_in = {load_temp[3], pix1_latch, pix2_latch, load_temp, load_temp[1:0], load_temp[5]};
+assign alt_bank = attr[2];
 
 wire [7:0] load_temp;
 always_comb begin
@@ -1145,14 +1153,17 @@ module PixelMuxer(
 	input  logic [3:0] bg,
 	input  logic [3:0] obj,
 	input  logic       obj_prio,
+	input  logic       obj_alt,   // HD extension: the sprite's attribute bit 3
 	output logic [4:0] out,
-	output logic       is_obj
+	output logic       is_obj,
+	output logic       alt_sel    // this pixel takes its colour from the alt sprite palette
 );
 
 wire bg_valid = |bg[1:0];
 wire obj_valid = |obj[1:0];
 
 assign is_obj = obj_valid && ~(obj_prio && bg_valid);
+assign alt_sel = is_obj && obj_alt;
 assign out = (bg_valid | obj_valid) ? (is_obj ? {1'b1, obj} : {1'b0, bg}) : 5'd0;
 
 endmodule
@@ -1172,7 +1183,10 @@ module PaletteRam
 	input c_corrupt,
 	input [4:0] raw_addr,
 	input in_range,
+	input alt_rd,             // HD extension: read the alt sprite palette at addr[3:0]
+	input alt_wr,             // HD extension: write din to the alt sprite palette at addr[3:0]
 	output [191:0] pal_all,   // HD pack: read-only copy of all 32 entries, entry n at [6n+5:6n]
+	output [95:0]  alt_all,   // HD extension: the 16 alt sprite palette entries, entry n at [6n+5:6n]
 	// savestates
 	input [63:0]  SaveStateBus_Din,
 	input [ 9:0]  SaveStateBus_Adr,
@@ -1210,12 +1224,23 @@ wire corrupting = old_rendering && ~rendering && c_corrupt && in_range;
 wire [4:0] addr2 = (addr[1:0] == 0) ? {1'b0, addr[3:0]} : addr;
 wire [4:0] addr3 = corrupting ? {addr2[4], raw_addr[3:2], addr2[1:0]} : addr2;
 
-assign dout = palette[addr3];
+// HD extension: a second set of sprite palettes, used by sprites whose attribute bit 3 is set.
+// Written through PPU $3F30-$3F3F only while the extension is unlocked; not in savestates (the
+// game rewrites it every frame, as it does the unlock).
+reg [5:0] alt_pal [16];
+integer ai;
+initial for (ai = 0; ai < 16; ai = ai + 1) alt_pal[ai] = 6'd0;
+assign dout = alt_rd ? alt_pal[addr[3:0]] : palette[addr3];
 
 genvar gp;
 generate for (gp = 0; gp < 32; gp = gp + 1) begin : g_pal_all
 	assign pal_all[gp*6 +: 6] = palette[gp];
 end endgenerate
+generate for (gp = 0; gp < 16; gp = gp + 1) begin : g_alt_all
+	assign alt_all[gp*6 +: 6] = alt_pal[gp];
+end endgenerate
+
+always @(posedge clk) if (ce && alt_wr) alt_pal[addr[3:0]] <= din;
 
 assign SS_PAL_BACK[0][ 5: 0] = palette[ 0]; assign SS_PAL_BACK[1][ 5: 0] = palette[1 ]; assign SS_PAL_BACK[2][ 5: 0] = palette[2 ]; assign SS_PAL_BACK[3][ 5: 0] = palette[3 ];
 assign SS_PAL_BACK[0][13: 8] = palette[ 4]; assign SS_PAL_BACK[1][13: 8] = palette[5 ]; assign SS_PAL_BACK[2][13: 8] = palette[6 ]; assign SS_PAL_BACK[3][13: 8] = palette[7 ];
@@ -1238,7 +1263,7 @@ always @(posedge clk) if (reset) begin
 	palette[24] <= SS_PAL[0][53:48]; palette[25] <= SS_PAL[1][53:48]; palette[26] <= SS_PAL[2][53:48]; palette[27] <= SS_PAL[3][53:48];
 	palette[28] <= SS_PAL[0][61:56]; palette[29] <= SS_PAL[1][61:56]; palette[30] <= SS_PAL[2][61:56]; palette[31] <= SS_PAL[3][61:56];
 end else if (ce) begin
-	if (write) begin
+	if (write && !alt_wr) begin
 		palette[addr2] <= din;
 	end
 
@@ -1401,7 +1426,10 @@ module PPU(
 	input         hd_nolimit,       // HD pack <options> disableSpriteLimit: extras forced on, Mesen's adaptive rule
 	input  [1:0]  mask,
 	input  [21:0] chr_lin,          // HD pack: linear CHR address of the current fetch (from the mapper)
-	output [415:0] hd_tap_bus,      // HD pack: observation tap, layout in rtl/hdpack/hd_engine.sv + hd_tap.sv
+	input         hd_ext,           // HD sprite extension unlocked (nes.v, $401C): OAM bits 2-3 kept,
+	                                // $3F30-$3F3F = alt sprite palette
+	output reg    vram_alt,         // HD sprite extension: this sprite pattern fetch uses the alt CHR bank
+	output [511:0] hd_tap_bus,      // HD pack: observation tap, layout in rtl/hdpack/hd_engine.sv + hd_tap.sv
 	output        render_ena_out,
 	output        evenframe,
 	// savestates
@@ -1639,6 +1667,7 @@ OAMEval spriteeval (
 	.PAL               (pal_system),
 	.masked_sprites    (masked_sprites),
 	.mesen_limit       (hd_nolimit),
+	.ext_on            (hd_ext),
 	 // savestates
 	.SaveStateBus_Din       (SaveStateBus_Din        ),
 	.SaveStateBus_Adr       (SaveStateBus_Adr        ),
@@ -1657,11 +1686,12 @@ wire [7:0] oam_bus;
 wire sprite_overflow;
 wire obj0_on_line; // True if sprite#0 is included on the current line
 
-wire [4:0] obj_pixel_noblank;
+wire [5:0] obj_pixel_noblank;
 wire [12:0] sprite_vram_addr;
 wire is_obj0_pixel;            // True if obj_pixel originates from sprite0.
 wire [3:0] spriteset_load;     // Which subset of the |load_in| to load into SpriteSet
-wire [26:0] spriteset_load_in; // Bits to load into SpriteSet
+wire [27:0] spriteset_load_in; // Bits to load into SpriteSet
+wire spr_alt_main, spr_alt_ex; // HD extension: attribute bit 2 of the sprite being fetched
 reg [2:0] emph_reg;
 
 // Between 257..320 (64 cycles), fetches bitmap data for the 8 sprites and fills in the SpriteSet
@@ -1682,13 +1712,14 @@ SpriteAddressGen address_gen(
 	.vram_data (vram_din),               // [in] Data at the specified address
 	.load      (spriteset_load),
 	.load_in   (spriteset_load_in),      // Which parts of SpriteGen to load
-	.is_dummy  (hd_spr_dummy)            // HD pack tap only
+	.is_dummy  (hd_spr_dummy),           // HD pack tap only
+	.alt_bank  (spr_alt_main)
 );
 
 wire [12:0] sprite_vram_addr_ex;
 wire hd_spr_ex_dummy;   // HD pack tap only
 wire [3:0] spriteset_load_ex;
-wire [26:0] spriteset_load_in_ex;
+wire [27:0] spriteset_load_in_ex;
 wire use_ex;
 
 SpriteAddressGenEx address_gen_ex(
@@ -1706,7 +1737,8 @@ SpriteAddressGenEx address_gen_ex(
 	.load_in        (spriteset_load_in_ex),    // Which parts of SpriteGen to load
 	.use_ex         (use_ex),
 	.masked_sprites (masked_sprites),
-	.is_dummy       (hd_spr_ex_dummy)    // HD pack tap only
+	.is_dummy       (hd_spr_ex_dummy),   // HD pack tap only
+	.alt_bank       (spr_alt_ex)
 );
 
 reg [3:0] sprite_sr;
@@ -1730,7 +1762,7 @@ SpriteSet sprite_gen(
 
 // Blank out obj in the leftmost 8 pixels?
 wire show_obj_on_pixel = (object_clip || out_of_clip) && eo_sr[1];
-wire [4:0] obj_pixel = {obj_pixel_noblank[4:2], show_obj_on_pixel ? obj_pixel_noblank[1:0] : 2'b00};
+wire [5:0] obj_pixel = {obj_pixel_noblank[5:2], show_obj_on_pixel ? obj_pixel_noblank[1:0] : 2'b00};
 
 reg sprite0_hit_bg;            // True if sprite#0 has collided with the BG in the last frame.
 
@@ -1766,13 +1798,16 @@ end
 
 wire [4:0] pixel;
 wire pixel_is_obj;
+wire pixel_alt;
 
 PixelMuxer pixel_muxer(
 	.bg       (bg_pixel),
 	.obj      (obj_pixel[3:0]),
 	.obj_prio (obj_pixel[4]),
+	.obj_alt  (obj_pixel[5] && hd_ext),
 	.out      (pixel),
-	.is_obj   (pixel_is_obj)
+	.is_obj   (pixel_is_obj),
+	.alt_sel  (pixel_alt)
 );
 
 // VRAM Address Assignment
@@ -1816,11 +1851,11 @@ hd_tap hd_tap
 	.show_bg          (show_bg_on_pixel),
 	.show_obj         (show_obj_on_pixel),
 	.spr_load         (spriteset_load),
-	.spr_load_in      (spriteset_load_in),
+	.spr_load_in      (spriteset_load_in[26:0]),
 	.spr_dummy        (hd_spr_dummy),
 	.extra_sprites    (ex_on),
 	.spr_load_ex      (spriteset_load_ex),
-	.spr_load_in_ex   (spriteset_load_in_ex),
+	.spr_load_in_ex   (spriteset_load_in_ex[26:0]),
 	.spr_ex_dummy     (hd_spr_ex_dummy),
 	.spr_ex_we        (hd_spr_ex_we),
 	.spr_ex_idx       (hd_spr_ex_idx),
@@ -1858,7 +1893,9 @@ hd_tap hd_tap
 // [410:352] extra sprites (the core's 16-sprite option): [352] write, [355:353] index within
 // the extra group (the record stores it at 8 + index), [410:356] the same 55-bit entry as
 // [89:35]. Above bit 351 so hd_engine's [319:0] slice is unchanged.
-assign hd_tap_bus = {5'd0, hd_spr_ex_data, hd_spr_ex_idx, hd_spr_ex_we,
+// [511:416] the HD extension's 16 alt sprite palette entries (entry n at [416+6n+5:416+6n]).
+wire [95:0] hd_alt_all;
+assign hd_tap_bus = {hd_alt_all, 5'd0, hd_spr_ex_data, hd_spr_ex_idx, hd_spr_ex_we,
                      7'd0, hd_snap, hd_line_pre, hd_px_emph, hd_px_gray, hd_px_finex, hd_px_t, hd_px_branch_b,
                      4'd0, hd_pal_all, hd_line_y, hd_line_done,
                      hd_px_spr_on, hd_px_bg_on, hd_px_bgc, hd_px_fx, hd_px_slot, hd_px_x, hd_px_we,
@@ -1902,6 +1939,7 @@ wire pattern_table_upper = cycle[1:0] == 3 || cycle[1:0] == 0;
 wire read_cycle = ~cycle[0];
 
 always_comb begin
+	vram_alt = 0;
 	if (~is_rendering_d) begin
 		vram_a = vram[13:0];
 		vram_r_ex = 0;
@@ -1911,6 +1949,10 @@ always_comb begin
 			vram_r_ex = use_ex && ex_on;
 		else
 			vram_r_ex = 0;
+
+		// HD extension: a sprite with attribute bit 2 fetches its pattern from the alt CHR bank
+		if (sprite_load_en && hd_ext)
+			vram_alt = vram_r_ex ? spr_alt_ex : (spr_alt_main && !nametable_read && !attribute_read);
 
 		if (nametable_read)
 			vram_a = {2'b10, vram[11:0]};                                 // Name Table
@@ -1993,7 +2035,10 @@ PaletteRam palette_ram(
 	.c_corrupt    (attribute_read ? (&{vram[13:12], vram_a[11:8]}) : &vram[13:8]), // Corrupt palette writes
 	.raw_addr     (vram[4:0]),
 	.in_range     (in_rendering_frame),
+	.alt_rd       (is_rendering && in_visible_frame && pixel_alt),
+	.alt_wr       (vram_w_ppudata && pal_writes_valid && hd_ext && vram[5:4] == 2'b11),
 	.pal_all      (hd_pal_all),        // HD pack tap only
+	.alt_all      (hd_alt_all),
 	// savestates
 	.SaveStateBus_Din  (SaveStateBus_Din ),
 	.SaveStateBus_Adr  (SaveStateBus_Adr ),
