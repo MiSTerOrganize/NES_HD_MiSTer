@@ -226,7 +226,7 @@ No-Intro NES DAT (headered) exactly; a note on each of the other five says where
 - Size: 524,304 bytes
 - MD5: `0FC159D4B59A2C43262FB826697E3807`
 - SHA-1: `02F259B882F4909F40C19B07FE0862F128EE7495`
-- Note: Dragon Warrior III (USA) patched with the Dragon Quest III Delocalized v1.14 hack by Translation Quest, then given a NES 2.0 header. New enough that no DAT lists it yet. The pack also accepts the same hack with its own iNES 1.0 header (SHA-1 B49CE1DA...) and v1.13 (SHA-1 B6346425...).
+- Note: Dragon Warrior III (USA) patched with the Dragon Quest III Delocalized v1.14 hack by Translation Quest, then given a NES 2.0 header. New enough that no DAT lists it yet. This is the ROM the pack is listed under, but the pack works with **every release of the hack** (tested on v1.13, v1.14 and v1.15, with the hack's own iNES 1.0 header or a NES 2.0 header), and with future releases as long as they leave the game's bank 30 unchanged. It also works with plain Dragon Warrior III (USA), which gets the HD graphics without the translation. The pack's ROM patch is applied by the core when the game loads; you never patch the ROM yourself.
 - Packs (1): Dragon Quest III (USA) [T-En by Translation Quest v1.14] [Delocalized] [n]
 
 **Duck Hunt (World).nes**
@@ -516,7 +516,9 @@ uses pev's Vomitron hybrid set.
 
 **Dragon Quest III** (Delocalized translation) - HD pack v0.5.1 by KCN2. The game is the Dragon Quest III
 Delocalized translation by the Translation Quest team. The pack's Lua script was turned into a ROM patch
-for MiSTer by MiSTer Organize.
+for MiSTer by MiSTer Organize. Press Select on the field to open the world map; a blinking dot shows where
+you are, on both the overworld and the underworld map. The map and its dot need core NES_HD_20261107 or
+newer.
 
 **Duck Hunt**
 - main pack: Duck Hunt HD v1.1 with NEA audio
